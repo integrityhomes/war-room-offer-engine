@@ -80,6 +80,7 @@ with st.sidebar:
     target_offer_discount = st.slider("Target offer discount from max", 0.50, 1.00, 0.85, 0.01)
     wholesale_buyer_percent_arv = st.slider("Wholesale buyer % of ARV", 0.40, 0.90, 0.70, 0.01)
     slow_flip_max_offer_cap = st.number_input("Normal slow flip max offer cap", min_value=0, value=32000, step=500, help="Bradley rule: 98% of slow-flip offers stay at or below this number. Use human review for exceptions.")
+    slow_flip_first_offer_gap = st.number_input("Slow flip first offer below max", min_value=0, value=4000, step=500, help="Negotiation rule: do not start at max. Example: $32k max starts at $28k.")
 
     st.divider()
     st.header("Data Connections")
@@ -96,6 +97,7 @@ assumptions = Assumptions(
     target_offer_discount=float(target_offer_discount),
     wholesale_buyer_percent_arv=float(wholesale_buyer_percent_arv),
     slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
+    slow_flip_first_offer_gap=float(slow_flip_first_offer_gap),
 )
 
 st.subheader("1. Pull Property Data")
@@ -209,8 +211,8 @@ if analyze:
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Deal Grade", result["grade"])
     m2.metric("Best Exit", result["best_exit"])
-    m3.metric("Target Offer", f"{money(best['target_offer_low'])} - {money(best['target_offer_high'])}")
-    m4.metric("Max Offer", money(best["max_offer"]))
+    m3.metric("First Offer", money(best.get("offer_to_send", best.get("target_offer_low", 0))))
+    m4.metric("Internal Max", money(best["max_offer"]))
 
     c1, c2 = st.columns(2)
     with c1:
@@ -218,9 +220,8 @@ if analyze:
         slow = result["slow_flip"]
         st.write({
             "Resale to slow flipper": money(slow["resale_to_slow_flipper"]),
-            "Target offer low": money(slow["target_offer_low"]),
-            "Target offer high": money(slow["target_offer_high"]),
-            "Max offer": money(slow["max_offer"]),
+            "First offer to send": money(slow.get("offer_to_send", 0)),
+            "Internal max offer": money(slow["max_offer"]),
             "Rent formula max before cap": money(slow.get("rent_formula_max_offer_before_cap", 0)),
             "Normal slow flip cap": money(slow.get("normal_slow_flip_cap", 0)),
             "Estimated fee at asking": money(slow["estimated_fee_at_ask"]),
@@ -263,9 +264,8 @@ if analyze:
             "rent": st.session_state["rent"],
             "arv": st.session_state.get("arv", 0),
             "repairs": st.session_state.get("repairs", 0),
-            "target_offer_low": best["target_offer_low"],
-            "target_offer_high": best["target_offer_high"],
-            "max_offer": best["max_offer"],
+            "first_offer": best.get("offer_to_send", best.get("target_offer_low", 0)),
+            "internal_max_offer": best["max_offer"],
             "estimated_fee_at_ask": best["estimated_fee_at_ask"],
             "livable": st.session_state["livable"],
             "occupancy": st.session_state["occupancy"],

@@ -13,6 +13,7 @@ class Assumptions:
     target_offer_discount: float = 0.85
     wholesale_buyer_percent_arv: float = 0.70
     slow_flip_max_offer_cap: float = 32000
+    slow_flip_first_offer_gap: float = 4000
 
 
 @dataclass
@@ -59,9 +60,18 @@ def calc_slow_flip(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
     normal_cap = clamp_nonnegative(getattr(a, "slow_flip_max_offer_cap", 32000))
     max_contract_price = min(rent_formula_max_offer, normal_cap) if normal_cap > 0 else rent_formula_max_offer
 
-    # For slow flips, target high is the one-number offer we are willing to present.
+    # Slow flip negotiation rule:
+    # The max offer is internal only. We do NOT send the max as the first offer.
+    # Normal first offer starts below max, usually $28k when the max is $32k.
+    first_offer_gap = clamp_nonnegative(getattr(a, "slow_flip_first_offer_gap", 4000))
+    first_offer = max(max_contract_price - first_offer_gap, 0)
+
+    # If the seller is asking below our normal first offer, do not offer above asking.
+    offer_to_send = min(first_offer, asking) if asking > 0 else first_offer
+
+    # Internal negotiation band only. Public message still uses one number.
+    target_offer_low = offer_to_send
     target_offer_high = max_contract_price
-    target_offer_low = target_offer_high * 0.90
 
     estimated_fee_at_ask = resale_to_slow_flipper - asking - a.close_title_buffer if asking else 0
 
@@ -70,6 +80,8 @@ def calc_slow_flip(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
         "resale_to_slow_flipper": resale_to_slow_flipper,
         "target_offer_low": target_offer_low,
         "target_offer_high": target_offer_high,
+        "first_offer": first_offer,
+        "offer_to_send": offer_to_send,
         "max_offer": max_contract_price,
         "rent_formula_max_offer_before_cap": rent_formula_max_offer,
         "normal_slow_flip_cap": normal_cap,
@@ -94,6 +106,8 @@ def calc_wholesale(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
         "buyer_target": buyer_target,
         "target_offer_low": target_offer_low,
         "target_offer_high": target_offer_high,
+        "first_offer": first_offer,
+        "offer_to_send": offer_to_send,
         "max_offer": max_contract_price,
         "estimated_fee_at_ask": estimated_fee_at_ask,
         "spread": buyer_target - asking if asking else buyer_target,
@@ -177,7 +191,7 @@ def make_rule_based_message(deal: DealInput, best: Dict[str, Any], grade: str) -
     # Public-facing offer rule:
     # We only give the agent/seller ONE number at a time.
     # The target range and max offer are for internal use only.
-    first_offer = money(best["target_offer_high"])
+    first_offer = money(best.get("offer_to_send", best.get("first_offer", best.get("target_offer_high", 0))))
 
     if grade in ["Pass", "Review"]:
         return (
@@ -228,7 +242,9 @@ def analyze_deal(deal: DealInput, assumptions: Assumptions | None = None) -> Dic
     if best.get("exit") == "Slow Flip" and deal.asking_price > best.get("max_offer", 0) > 0:
         risks.insert(0, f"Asking price is above the normal slow-flip max of {money(best.get('max_offer', 0))}. Do not chase unless there is a pre-committed buyer or Shawn/Sabrina approves the exception.")
     if best.get("exit") == "Slow Flip" and best.get("rent_formula_max_offer_before_cap", 0) > best.get("max_offer", 0):
-        risks.append(f"Rent formula supports up to {money(best.get('rent_formula_max_offer_before_cap', 0))}, but the Bradley slow-flip cap holds the offer at {money(best.get('max_offer', 0))}.")
+        risks.append(f"Rent formula supports up to {money(best.get('rent_formula_max_offer_before_cap', 0))}, but the Bradley slow-flip cap holds the max at {money(best.get('max_offer', 0))}.")
+    if best.get("exit") == "Slow Flip" and best.get("offer_to_send", 0) > 0 and best.get("max_offer", 0) > best.get("offer_to_send", 0):
+        risks.append(f"Negotiation rule: first offer is {money(best.get('offer_to_send', 0))}. Keep the {money(best.get('max_offer', 0))} max internal and do not reveal it to the agent/seller.")
     message = make_rule_based_message(deal, best, grade)
 
     return {
