@@ -12,6 +12,7 @@ class Assumptions:
     close_title_buffer: float = 1500
     target_offer_discount: float = 0.85
     wholesale_buyer_percent_arv: float = 0.70
+    slow_flip_max_offer_cap: float = 32000
 
 
 @dataclass
@@ -51,8 +52,15 @@ def calc_slow_flip(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
     asking = clamp_nonnegative(deal.asking_price)
 
     resale_to_slow_flipper = rent * a.slow_flip_rent_multiple
-    max_contract_price = max(resale_to_slow_flipper - a.min_assignment_fee - a.close_title_buffer, 0)
-    target_offer_high = max_contract_price * a.target_offer_discount
+    rent_formula_max_offer = max(resale_to_slow_flipper - a.min_assignment_fee - a.close_title_buffer, 0)
+
+    # Bradley slow-flip rule: 98% of slow-flip offers stay at or below $32,000.
+    # The rent formula still runs, but the public offer/max is capped unless a human approves an exception.
+    normal_cap = clamp_nonnegative(getattr(a, "slow_flip_max_offer_cap", 32000))
+    max_contract_price = min(rent_formula_max_offer, normal_cap) if normal_cap > 0 else rent_formula_max_offer
+
+    # For slow flips, target high is the one-number offer we are willing to present.
+    target_offer_high = max_contract_price
     target_offer_low = target_offer_high * 0.90
 
     estimated_fee_at_ask = resale_to_slow_flipper - asking - a.close_title_buffer if asking else 0
@@ -63,6 +71,8 @@ def calc_slow_flip(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
         "target_offer_low": target_offer_low,
         "target_offer_high": target_offer_high,
         "max_offer": max_contract_price,
+        "rent_formula_max_offer_before_cap": rent_formula_max_offer,
+        "normal_slow_flip_cap": normal_cap,
         "estimated_fee_at_ask": estimated_fee_at_ask,
         "spread": resale_to_slow_flipper - asking if asking else resale_to_slow_flipper,
     }
@@ -164,10 +174,10 @@ def risk_notes(deal: DealInput, best_exit: str) -> list[str]:
 
 
 def make_rule_based_message(deal: DealInput, best: Dict[str, Any], grade: str) -> str:
-    low = money(best["target_offer_low"])
-    high = money(best["target_offer_high"])
-    max_offer = money(best["max_offer"])
-    fee = money(best.get("estimated_fee_at_ask", 0))
+    # Public-facing offer rule:
+    # We only give the agent/seller ONE number at a time.
+    # The target range and max offer are for internal use only.
+    first_offer = money(best["target_offer_high"])
 
     if grade in ["Pass", "Review"]:
         return (
@@ -180,15 +190,15 @@ def make_rule_based_message(deal: DealInput, best: Dict[str, Any], grade: str) -
         return (
             "Agent message:\n\n"
             f"Hey, thanks for the info. Based on the rent and where we would need to be as cash buyers, "
-            f"we would likely be in the {low} to {high} range, with our absolute max around {max_offer} if everything checks out. "
-            "We can buy as-is and keep it simple. Do you think the seller would consider something in that range?"
+            f"we could offer {first_offer} cash, as-is, subject to clean title and final walkthrough. "
+            "We can keep it simple for the seller. Would you be able to present that?"
         )
 
     return (
         "Seller message:\n\n"
         f"Thanks for the details. Based on the rent and what we would need to make the numbers work, "
-        f"we would probably be around {low} to {high} cash, as-is, with our max around {max_offer} if everything checks out. "
-        "Is that close enough for me to keep working on it?"
+        f"we could offer {first_offer} cash, as-is, subject to clean title and final walkthrough. "
+        "Is that something you would want me to write up?"
     )
 
 
@@ -215,6 +225,10 @@ def analyze_deal(deal: DealInput, assumptions: Assumptions | None = None) -> Dic
 
     grade = grade_deal(best, deal.asking_price, a) if best_exit != "Pass" else "Pass"
     risks = risk_notes(deal, best_exit)
+    if best.get("exit") == "Slow Flip" and deal.asking_price > best.get("max_offer", 0) > 0:
+        risks.insert(0, f"Asking price is above the normal slow-flip max of {money(best.get('max_offer', 0))}. Do not chase unless there is a pre-committed buyer or Shawn/Sabrina approves the exception.")
+    if best.get("exit") == "Slow Flip" and best.get("rent_formula_max_offer_before_cap", 0) > best.get("max_offer", 0):
+        risks.append(f"Rent formula supports up to {money(best.get('rent_formula_max_offer_before_cap', 0))}, but the Bradley slow-flip cap holds the offer at {money(best.get('max_offer', 0))}.")
     message = make_rule_based_message(deal, best, grade)
 
     return {

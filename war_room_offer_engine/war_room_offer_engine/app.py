@@ -79,6 +79,7 @@ with st.sidebar:
     close_title_buffer = st.number_input("Close/title/safety buffer", min_value=0, value=1500, step=250)
     target_offer_discount = st.slider("Target offer discount from max", 0.50, 1.00, 0.85, 0.01)
     wholesale_buyer_percent_arv = st.slider("Wholesale buyer % of ARV", 0.40, 0.90, 0.70, 0.01)
+    slow_flip_max_offer_cap = st.number_input("Normal slow flip max offer cap", min_value=0, value=32000, step=500, help="Bradley rule: 98% of slow-flip offers stay at or below this number. Use human review for exceptions.")
 
     st.divider()
     st.header("Data Connections")
@@ -94,6 +95,7 @@ assumptions = Assumptions(
     close_title_buffer=float(close_title_buffer),
     target_offer_discount=float(target_offer_discount),
     wholesale_buyer_percent_arv=float(wholesale_buyer_percent_arv),
+    slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
 )
 
 st.subheader("1. Pull Property Data")
@@ -219,6 +221,8 @@ if analyze:
             "Target offer low": money(slow["target_offer_low"]),
             "Target offer high": money(slow["target_offer_high"]),
             "Max offer": money(slow["max_offer"]),
+            "Rent formula max before cap": money(slow.get("rent_formula_max_offer_before_cap", 0)),
+            "Normal slow flip cap": money(slow.get("normal_slow_flip_cap", 0)),
             "Estimated fee at asking": money(slow["estimated_fee_at_ask"]),
         })
 
