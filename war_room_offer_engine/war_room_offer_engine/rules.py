@@ -99,6 +99,12 @@ def calc_wholesale(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
     max_contract_price = max(buyer_target - a.min_assignment_fee - a.close_title_buffer, 0)
     target_offer_high = max_contract_price * a.target_offer_discount
     target_offer_low = target_offer_high * 0.90
+
+    # Wholesale uses the low side of the internal target range as the first offer.
+    # The max is internal only and should not be shown to agents/sellers.
+    first_offer = target_offer_low
+    offer_to_send = min(first_offer, asking) if asking > 0 else first_offer
+
     estimated_fee_at_ask = buyer_target - asking - a.close_title_buffer if asking else 0
 
     return {
