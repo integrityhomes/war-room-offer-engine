@@ -150,11 +150,19 @@ if pull_data:
         st.session_state["last_auto_pull"] = merged
         update_state_from_auto_pull(merged)
 
-    good = [r.source for r in results if r.ok]
-    if good:
-        st.success("Pulled data from: " + ", ".join(good))
+    good = []
+for r in results:
+    if isinstance(r, dict):
+        if r.get("found") or r.get("ok"):
+            good.append(r.get("source", "Unknown"))
     else:
-        st.warning("No data pulled yet. Add Streamlit secrets or verify the address. Manual analysis still works.")
+        if getattr(r, "ok", False) or getattr(r, "found", False):
+            good.append(getattr(r, "source", "Unknown"))
+
+if good:
+    st.success("Pulled data from: " + ", ".join(good))
+else:
+    st.warning("No data pulled yet. Add Streamlit secrets or verify the address. Manual analysis still works.")
 
 if st.session_state.get("last_source_results"):
     with st.expander("Data pull results"):
