@@ -12,6 +12,8 @@ st.set_page_config(page_title="War Room Offer Engine", page_icon="🏠", layout=
 FIELD_DEFAULTS = {
     "address": "",
     "market": "",
+    "source_mode": "Zillow / Sheet Match",
+    "lead_source": "Zillow / Apify",
     "lead_type": "Agent",
     "status": "Unknown",
     "asking_price": 35000,
@@ -69,7 +71,7 @@ def update_state_from_auto_pull(data: dict) -> None:
 
 
 st.title("🏠 War Room Offer Engine")
-st.caption("Deal Analyzer MVP — pulls data automatically when keys/sheet links are added, manual fallback always works.")
+st.caption("Universal Property Analyzer — Zillow/Sheet leads, MLS leads, off-market sellers, RentCast, and manual fallback in one place.")
 
 with st.sidebar:
     st.header("Offer Assumptions")
@@ -86,8 +88,8 @@ with st.sidebar:
     st.header("Data Connections")
     st.caption("Green means ready. Missing connections do not stop manual analysis.")
     st.write("✅ RentCast API key" if get_secret("RENTCAST_API_KEY") else "⚠️ RentCast API key missing")
-    st.write("✅ Apify/Zillow sheet" if get_secret("APIFY_ZILLOW_SHEET_CSV_URL") else "⚠️ Apify/Zillow sheet URL missing")
-    st.write("✅ Lead sheet" if get_secret("LEADS_SHEET_CSV_URL") else "⚠️ Lead sheet URL missing")
+    st.write("✅ Zillow/Master Feed CSV" if get_secret("APIFY_ZILLOW_SHEET_CSV_URL") else "⚠️ Zillow/Master Feed CSV missing")
+    st.write("✅ Lead sheet" if get_secret("LEADS_SHEET_CSV_URL") else "ℹ️ Lead sheet blank / optional")
 
 assumptions = Assumptions(
     min_assignment_fee=float(min_assignment_fee),
@@ -101,6 +103,28 @@ assumptions = Assumptions(
 )
 
 st.subheader("1. Pull Property Data")
+
+source_col1, source_col2 = st.columns([1, 1])
+with source_col1:
+    st.radio(
+        "Source mode",
+        ["Zillow / Sheet Match", "Off-Market / Manual"],
+        key="source_mode",
+        horizontal=True,
+        help="Zillow / Sheet Match searches your published Master Feed. Off-Market / Manual skips the sheet and uses RentCast + your manual inputs.",
+    )
+with source_col2:
+    st.selectbox(
+        "Lead source",
+        ["Zillow / Apify", "MLS / Agent", "Off-Market Seller", "Facebook", "Driving for Dollars", "Cold Text Reply", "Manual Entry", "Other"],
+        key="lead_source",
+    )
+
+if st.session_state.get("source_mode") == "Off-Market / Manual":
+    st.info("Off-market/manual mode skips the Zillow/Master Feed. Enter the seller ask manually if you have it. RentCast will still pull rent, beds, baths, sq ft, value, and facts.")
+else:
+    st.info("Zillow/Sheet mode uses RentCast plus your Master Feed CSV to pull asking price, Zillow link, status, and other listing data when the address matches.")
+
 lookup_col1, lookup_col2 = st.columns([3, 1])
 with lookup_col1:
     st.text_input("Property address", key="address", placeholder="123 Main St, Decatur IL 62522")
@@ -110,12 +134,16 @@ with lookup_col2:
     pull_data = st.button("Pull Data", type="primary", use_container_width=True)
 
 if pull_data:
-    with st.spinner("Pulling RentCast + Google Sheet data..."):
+    include_listing_sheet = st.session_state.get("source_mode") == "Zillow / Sheet Match"
+    spinner_text = "Pulling RentCast + Master Feed data..." if include_listing_sheet else "Pulling RentCast data only..."
+    with st.spinner(spinner_text):
         results = fetch_all_sources(
             st.session_state["address"],
             beds=float(st.session_state.get("beds", 0) or 0),
             baths=float(st.session_state.get("baths", 0) or 0),
             sqft=float(st.session_state.get("sqft", 0) or 0),
+            include_listing_sheet=include_listing_sheet,
+            include_lead_sheet=include_listing_sheet,
         )
         merged = merge_results(results)
         st.session_state["last_source_results"] = results
@@ -138,7 +166,7 @@ if st.session_state.get("last_source_results"):
                 st.warning(f"{result.source}: {result.message}")
 
 st.subheader("2. Property Inputs")
-st.caption("Slow Flip does not depend on ARV/repairs, but the app still pulls value/facts so you can make a smarter decision.")
+st.caption("Works for Zillow, MLS, agent leads, and off-market sellers. Slow Flip uses rent/livability; ARV and repairs are reference unless you switch to Wholesale/Auto.")
 
 exit_mode = st.radio(
     "Deal type",
@@ -178,6 +206,7 @@ else:
     st.info("Slow Flip mode uses rent × multiple. ARV and repairs are not required, but value data will show here after RentCast pulls it.")
 
 st.text_area("Seller/agent notes, condition, occupancy, motivation", height=120, key="notes")
+st.caption(f"Current source: {st.session_state.get('source_mode')} / {st.session_state.get('lead_source')}")
 
 analyze = st.button("Analyze Deal", type="primary")
 
@@ -256,6 +285,8 @@ if analyze:
         row = {
             "address": st.session_state["address"],
             "market": st.session_state["market"],
+            "source_mode": st.session_state.get("source_mode", ""),
+            "lead_source": st.session_state.get("lead_source", ""),
             "lead_type": st.session_state["lead_type"],
             "exit_mode": exit_mode,
             "grade": result["grade"],
