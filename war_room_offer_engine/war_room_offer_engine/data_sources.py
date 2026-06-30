@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+from typing import Any
+
 import pandas as pd
 import requests
 
@@ -9,6 +11,7 @@ import requests
 def get_secret(name: str, default: str = "") -> str:
     try:
         import streamlit as st
+
         value = st.secrets.get(name, default)
         return str(value).strip() if value is not None else default
     except Exception:
@@ -43,11 +46,13 @@ def normalize_address(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def money_to_float(value) -> float:
+def money_to_float(value: Any) -> float:
     if value is None:
         return 0.0
+
     text = str(value)
     text = re.sub(r"[^0-9.]", "", text)
+
     try:
         return float(text) if text else 0.0
     except Exception:
@@ -56,10 +61,12 @@ def money_to_float(value) -> float:
 
 def first_existing_column(df: pd.DataFrame, possible_names: list[str]) -> str | None:
     lower_map = {str(c).strip().lower(): c for c in df.columns}
+
     for name in possible_names:
         found = lower_map.get(name.lower())
         if found is not None:
             return found
+
     return None
 
 
@@ -71,6 +78,83 @@ def read_csv_url(url: str) -> pd.DataFrame:
         return pd.read_csv(str(url).strip())
     except Exception:
         return pd.DataFrame()
+
+
+def extract_latest_tax_amount(property_taxes: Any) -> float:
+    if not property_taxes:
+        return 0.0
+
+    candidates: list[tuple[int, float]] = []
+
+    if isinstance(property_taxes, dict):
+        for year_key, tax_value in property_taxes.items():
+            year = 0
+            try:
+                year = int(re.sub(r"[^0-9]", "", str(year_key))[:4])
+            except Exception:
+                year = 0
+
+            if isinstance(tax_value, dict):
+                amount = 0.0
+                for key in [
+                    "total",
+                    "amount",
+                    "tax",
+                    "taxes",
+                    "taxAmount",
+                    "propertyTax",
+                    "propertyTaxes",
+                    "value",
+                ]:
+                    amount = money_to_float(tax_value.get(key))
+                    if amount > 0:
+                        break
+            else:
+                amount = money_to_float(tax_value)
+
+            if amount > 0:
+                candidates.append((year, amount))
+
+    if isinstance(property_taxes, list):
+        for item in property_taxes:
+            if not isinstance(item, dict):
+                amount = money_to_float(item)
+                if amount > 0:
+                    candidates.append((0, amount))
+                continue
+
+            year = 0
+            for year_key in ["year", "taxYear"]:
+                try:
+                    year = int(item.get(year_key, 0) or 0)
+                    if year:
+                        break
+                except Exception:
+                    year = 0
+
+            amount = 0.0
+            for key in [
+                "total",
+                "amount",
+                "tax",
+                "taxes",
+                "taxAmount",
+                "propertyTax",
+                "propertyTaxes",
+                "value",
+            ]:
+                amount = money_to_float(item.get(key))
+                if amount > 0:
+                    break
+
+            if amount > 0:
+                candidates.append((year, amount))
+
+    if not candidates:
+        return 0.0
+
+    candidates.sort(key=lambda x: x[0])
+    return float(candidates[-1][1])
 
 
 def lookup_google_sheet_csv(address: str, secret_name: str, label: str) -> dict:
@@ -97,7 +181,6 @@ def lookup_google_sheet_csv(address: str, secret_name: str, label: str) -> dict:
         return {"source": label, "found": False, "notes": "No usable address/message column found."}
 
     target = normalize_address(address)
-
     df["_norm_address"] = df[address_col].astype(str).map(normalize_address)
 
     matches = df[df["_norm_address"].str.contains(target, na=False, regex=False)]
@@ -119,6 +202,22 @@ def lookup_google_sheet_csv(address: str, secret_name: str, label: str) -> dict:
         get_col(["Asking_Price", "Price", "Max_Price", "List_Price", "asking price"], 0)
     )
 
+    rent = money_to_float(
+        get_col(["Rent", "Rent_Estimate", "RC_Rent_Estimate", "RC_Rent_Clean"], 0)
+    )
+
+    arv = money_to_float(
+        get_col(["ARV", "Estimated_Value", "Value", "RC_Value", "RentCast_Value"], 0)
+    )
+
+    taxes = money_to_float(
+        get_col(["Annual_Taxes", "Taxes", "Property_Taxes", "Tax_Amount", "Annual Tax"], 0)
+    )
+
+    beds = money_to_float(get_col(["Beds", "Bedrooms", "RC_Beds"], 0))
+    baths = money_to_float(get_col(["Baths", "Bathrooms", "RC_Baths"], 0))
+    sqft = money_to_float(get_col(["Sqft", "Sq_Ft", "Square_Feet", "RC_Sqft"], 0))
+
     zillow_link = get_col(["Zillow_Link", "Listing_Url", "Listing_URL", "URL", "Link"], "")
     status = get_col(["Listing_Status", "Status"], "")
     days_on_market = money_to_float(get_col(["Days_On_Market", "DOM"], 0))
@@ -128,11 +227,23 @@ def lookup_google_sheet_csv(address: str, secret_name: str, label: str) -> dict:
     priority = get_col(["Acq_Priority", "Priority"], "")
     source = get_col(["Source", "Lead_Source"], label)
 
+    matched_address = get_col(
+        ["Property_Address", "Address", "Full_Address", "Opening_Message"],
+        "",
+    )
+
     return {
         "source": label,
         "found": True,
         "asking_price": asking_price,
+        "rent": rent,
+        "beds": beds,
+        "baths": baths,
+        "sqft": sqft,
+        "arv": arv,
+        "taxes": taxes,
         "zillow_link": zillow_link,
+        "listing_url": zillow_link,
         "status": status,
         "days_on_market": days_on_market,
         "agent_name": agent_name,
@@ -140,13 +251,20 @@ def lookup_google_sheet_csv(address: str, secret_name: str, label: str) -> dict:
         "brokerage": brokerage,
         "priority": priority,
         "lead_source": source,
-        "matched_address": get_col(["Property_Address", "Address", "Full_Address", "Opening_Message"], ""),
-        "notes": f"Matched sheet address: {get_col(['Property_Address', 'Address', 'Full_Address', 'Opening_Message'], '')}",
+        "matched_address": matched_address,
+        "matched_sheet_address": matched_address,
+        "notes": f"Matched sheet address: {matched_address}",
     }
 
 
-def lookup_rentcast(address: str) -> dict:
+def lookup_rentcast(
+    address: str,
+    beds: float = 0,
+    baths: float = 0,
+    sqft: float = 0,
+) -> dict:
     api_key = get_secret("RENTCAST_API_KEY", "")
+
     if not api_key:
         return {"source": "RentCast", "found": False, "notes": "Missing RentCast API key."}
 
@@ -160,17 +278,23 @@ def lookup_rentcast(address: str) -> dict:
         "baths": 0,
         "sqft": 0,
         "arv": 0,
+        "taxes": 0,
         "year_built": "",
         "property_type": "",
         "notes": "",
     }
 
     try:
-        prop_url = "https://api.rentcast.io/v1/properties"
-        prop_resp = requests.get(prop_url, headers=headers, params={"address": address}, timeout=20)
+        prop_resp = requests.get(
+            "https://api.rentcast.io/v1/properties",
+            headers=headers,
+            params={"address": address},
+            timeout=20,
+        )
 
         if prop_resp.status_code == 200:
             data = prop_resp.json()
+
             if isinstance(data, list) and data:
                 p = data[0]
             elif isinstance(data, dict):
@@ -178,16 +302,30 @@ def lookup_rentcast(address: str) -> dict:
             else:
                 p = {}
 
-            result["found"] = True
-            result["beds"] = p.get("bedrooms") or p.get("beds") or 0
-            result["baths"] = p.get("bathrooms") or p.get("baths") or 0
-            result["sqft"] = p.get("squareFootage") or p.get("sqft") or 0
-            result["year_built"] = p.get("yearBuilt") or ""
-            result["property_type"] = p.get("propertyType") or ""
-            result["arv"] = p.get("price") or p.get("value") or 0
+            if p:
+                result["found"] = True
+                result["beds"] = p.get("bedrooms") or p.get("beds") or 0
+                result["baths"] = p.get("bathrooms") or p.get("baths") or 0
+                result["sqft"] = p.get("squareFootage") or p.get("sqft") or 0
+                result["year_built"] = p.get("yearBuilt") or ""
+                result["property_type"] = p.get("propertyType") or ""
+                result["taxes"] = extract_latest_tax_amount(p.get("propertyTaxes"))
 
-        rent_url = "https://api.rentcast.io/v1/avm/rent/long-term"
-        rent_resp = requests.get(rent_url, headers=headers, params={"address": address}, timeout=20)
+        avm_params = {"address": address}
+
+        if beds:
+            avm_params["bedrooms"] = beds
+        if baths:
+            avm_params["bathrooms"] = baths
+        if sqft:
+            avm_params["squareFootage"] = sqft
+
+        rent_resp = requests.get(
+            "https://api.rentcast.io/v1/avm/rent/long-term",
+            headers=headers,
+            params=avm_params,
+            timeout=20,
+        )
 
         if rent_resp.status_code == 200:
             rent_data = rent_resp.json()
@@ -200,7 +338,54 @@ def lookup_rentcast(address: str) -> dict:
                 or 0
             )
 
-        result["notes"] = f"Auto-pulled data: Year Built: {result.get('year_built')} | Property Type: {result.get('property_type')}"
+            subject = rent_data.get("subjectProperty") or {}
+            if subject:
+                result["beds"] = result["beds"] or subject.get("bedrooms") or 0
+                result["baths"] = result["baths"] or subject.get("bathrooms") or 0
+                result["sqft"] = result["sqft"] or subject.get("squareFootage") or 0
+                result["property_type"] = result["property_type"] or subject.get("propertyType") or ""
+                result["year_built"] = result["year_built"] or subject.get("yearBuilt") or ""
+
+        value_resp = requests.get(
+            "https://api.rentcast.io/v1/avm/value",
+            headers=headers,
+            params=avm_params,
+            timeout=20,
+        )
+
+        if value_resp.status_code == 200:
+            value_data = value_resp.json()
+            result["found"] = True
+            result["arv"] = (
+                value_data.get("price")
+                or value_data.get("value")
+                or value_data.get("valueEstimate")
+                or value_data.get("estimatedValue")
+                or 0
+            )
+
+            subject = value_data.get("subjectProperty") or {}
+            if subject:
+                result["beds"] = result["beds"] or subject.get("bedrooms") or 0
+                result["baths"] = result["baths"] or subject.get("bathrooms") or 0
+                result["sqft"] = result["sqft"] or subject.get("squareFootage") or 0
+                result["property_type"] = result["property_type"] or subject.get("propertyType") or ""
+                result["year_built"] = result["year_built"] or subject.get("yearBuilt") or ""
+
+        note_parts = []
+        if result.get("year_built"):
+            note_parts.append(f"Year Built: {result['year_built']}")
+        if result.get("property_type"):
+            note_parts.append(f"Property Type: {result['property_type']}")
+        if result.get("taxes"):
+            note_parts.append(f"Annual Taxes: {result['taxes']}")
+        if result.get("arv"):
+            note_parts.append(f"ARV: {result['arv']}")
+        if result.get("rent"):
+            note_parts.append(f"Rent: {result['rent']}")
+
+        result["notes"] = "Auto-pulled data: " + " | ".join(note_parts) if note_parts else "RentCast checked."
+
         return result
 
     except Exception as e:
@@ -217,15 +402,20 @@ def merge_results(results: list[dict]) -> dict:
         "beds": 0,
         "baths": 0,
         "sqft": 0,
+        "taxes": 0,
         "arv": 0,
         "status": "Unknown",
         "days_on_market": 0,
         "zillow_link": "",
+        "listing_url": "",
         "agent_name": "",
         "agent_phone": "",
         "brokerage": "",
         "priority": "",
         "lead_source": "",
+        "year_built": "",
+        "property_type": "",
+        "matched_sheet_address": "",
         "notes": "",
         "sources_found": [],
     }
@@ -233,8 +423,11 @@ def merge_results(results: list[dict]) -> dict:
     notes = []
 
     for r in results:
-        if not r or not r.get("found"):
-            if r and r.get("notes"):
+        if not r or not isinstance(r, dict):
+            continue
+
+        if not r.get("found"):
+            if r.get("notes"):
                 notes.append(r.get("notes"))
             continue
 
@@ -246,17 +439,23 @@ def merge_results(results: list[dict]) -> dict:
             "beds",
             "baths",
             "sqft",
+            "taxes",
             "arv",
             "status",
             "days_on_market",
             "zillow_link",
+            "listing_url",
             "agent_name",
             "agent_phone",
             "brokerage",
             "priority",
             "lead_source",
+            "year_built",
+            "property_type",
+            "matched_sheet_address",
         ]:
             value = r.get(key)
+
             if value not in [None, "", 0, 0.0, "Unknown"]:
                 merged[key] = value
 
@@ -264,6 +463,7 @@ def merge_results(results: list[dict]) -> dict:
             notes.append(r.get("notes"))
 
     merged["notes"] = " | ".join(notes)
+
     return merged
 
 
@@ -278,44 +478,18 @@ def fetch_all_sources(
     include_lead_sheet: bool = False,
     **kwargs,
 ) -> list[dict]:
-    """
-    Pulls property data from RentCast and optional Google Sheet feeds.
-
-    This function is intentionally flexible so app.py will not crash
-    if older/newer versions send extra arguments like beds, baths, sqft,
-    source_mode, lead_source, include_listing_sheet, or include_lead_sheet.
-    """
-
     results = []
 
-    # Always try RentCast first
-    results.append(lookup_rentcast(address))
+    results.append(
+        lookup_rentcast(
+            address,
+            beds=beds,
+            baths=baths,
+            sqft=sqft,
+        )
+    )
 
-    # Zillow / Master Feed lookup
     if include_listing_sheet:
-        results.append(
-            lookup_google_sheet_csv(
-                address,
-                "APIFY_ZILLOW_SHEET_CSV_URL",
-                "Master Feed CSV",
-            )
-        )
-
-    # Optional lead sheet lookup. Safe to leave off for now.
-    if include_lead_sheet:
-        results.append(
-            lookup_google_sheet_csv(
-                address,
-                "LEADS_SHEET_CSV_URL",
-                "Lead Sheet CSV",
-            )
-        )
-
-    return results
-
-    results.append(lookup_rentcast(address))
-
-    if source_mode == "Zillow / Sheet Match" and include_listing_sheet:
         results.append(
             lookup_google_sheet_csv(
                 address,
