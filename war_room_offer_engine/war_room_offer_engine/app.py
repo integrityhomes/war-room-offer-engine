@@ -167,11 +167,22 @@ else:
 if st.session_state.get("last_source_results"):
     with st.expander("Data pull results"):
         for result in st.session_state["last_source_results"]:
-            if result.ok:
-                st.success(f"{result.source}: {result.message}")
-                st.write(result.data)
+            if st.session_state.get("last_source_results"):
+    with st.expander("Data pull results"):
+        for result in st.session_state["last_source_results"]:
+            if isinstance(result, dict):
+                source = result.get("source", "Unknown")
+                found = result.get("found") or result.get("ok")
+                message = result.get("notes") or result.get("message") or ""
             else:
-                st.warning(f"{result.source}: {result.message}")
+                source = getattr(result, "source", "Unknown")
+                found = getattr(result, "ok", False) or getattr(result, "found", False)
+                message = getattr(result, "message", "") or getattr(result, "notes", "")
+
+            if found:
+                st.success(f"{source}: {message}")
+            else:
+                st.info(f"{source}: {message}")
 
 st.subheader("2. Property Inputs")
 st.caption("Works for Zillow, MLS, agent leads, and off-market sellers. Slow Flip uses rent/livability; ARV and repairs are reference unless you switch to Wholesale/Auto.")
