@@ -269,12 +269,49 @@ def merge_results(results: list[dict]) -> dict:
 
 def fetch_all_sources(
     address: str,
+    beds: float = 0,
+    baths: float = 0,
+    sqft: float = 0,
     source_mode: str = "Zillow / Sheet Match",
     lead_source: str = "Zillow / Apify",
     include_listing_sheet: bool = True,
     include_lead_sheet: bool = False,
+    **kwargs,
 ) -> list[dict]:
+    """
+    Pulls property data from RentCast and optional Google Sheet feeds.
+
+    This function is intentionally flexible so app.py will not crash
+    if older/newer versions send extra arguments like beds, baths, sqft,
+    source_mode, lead_source, include_listing_sheet, or include_lead_sheet.
+    """
+
     results = []
+
+    # Always try RentCast first
+    results.append(lookup_rentcast(address))
+
+    # Zillow / Master Feed lookup
+    if include_listing_sheet:
+        results.append(
+            lookup_google_sheet_csv(
+                address,
+                "APIFY_ZILLOW_SHEET_CSV_URL",
+                "Master Feed CSV",
+            )
+        )
+
+    # Optional lead sheet lookup. Safe to leave off for now.
+    if include_lead_sheet:
+        results.append(
+            lookup_google_sheet_csv(
+                address,
+                "LEADS_SHEET_CSV_URL",
+                "Lead Sheet CSV",
+            )
+        )
+
+    return results
 
     results.append(lookup_rentcast(address))
 
