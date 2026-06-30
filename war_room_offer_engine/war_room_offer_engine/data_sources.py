@@ -2,405 +2,298 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
-
 import pandas as pd
 import requests
-import streamlit as st
-
-
-RENTCAST_BASE_URL = "https://api.rentcast.io/v1"
-
-
-@dataclass
-class SourceResult:
-    source: str
-    ok: bool
-    message: str
-    data: Dict[str, Any] = field(default_factory=dict)
-    raw: Any = None
 
 
 def get_secret(name: str, default: str = "") -> str:
-    """Read from Streamlit secrets first, then environment variables."""
     try:
-        value = st.secrets.get(name, default)  # type: ignore[attr-defined]
-        if value is None:
-            return default
-        return str(value).strip()
+        import streamlit as st
+        value = st.secrets.get(name, default)
+        return str(value).strip() if value is not None else default
     except Exception:
-        return os.getenv(name, default).strip()
+        return str(os.environ.get(name, default)).strip()
 
 
-def normalize_address(value: Any) -> str:
-    if value is None:
-        return ""
-    text = str(value)
-    if not text.strip() or text.lower().strip() in {"nan", "none"}:
-        return ""
-    v = text.lower().strip()
-    v = re.sub(r"[^a-z0-9 ]+", " ", v)
-    v = re.sub(r"\s+", " ", v)
+def normalize_address(value: str) -> str:
+    value = str(value or "").lower()
+    value = re.sub(r"[^a-z0-9 ]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+
     replacements = {
         " street ": " st ",
         " avenue ": " ave ",
         " road ": " rd ",
         " drive ": " dr ",
-        " boulevard ": " blvd ",
-        " lane ": " ln ",
         " court ": " ct ",
+        " lane ": " ln ",
         " place ": " pl ",
-        " terrace ": " ter ",
-        " circle ": " cir ",
+        " boulevard ": " blvd ",
         " north ": " n ",
         " south ": " s ",
         " east ": " e ",
         " west ": " w ",
+        " decatur illinois ": " decatur il ",
     }
-    v = f" {v} "
+
+    value = f" {value} "
     for old, new in replacements.items():
-        v = v.replace(old, new)
-    return re.sub(r"\s+", " ", v).strip()
+        value = value.replace(old, new)
+
+    return re.sub(r"\s+", " ", value).strip()
 
 
-def clean_money(value: Any) -> float:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+def money_to_float(value) -> float:
+    if value is None:
         return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value).strip()
-    if not text or text.lower() in {"nan", "none"}:
-        return 0.0
-    text = re.sub(r"[^0-9.\-]", "", text)
+    text = str(value)
+    text = re.sub(r"[^0-9.]", "", text)
     try:
-        return float(text)
+        return float(text) if text else 0.0
     except Exception:
         return 0.0
 
 
-def first_number(*values: Any) -> float:
-    for value in values:
-        num = clean_money(value)
-        if num > 0:
-            return num
-    return 0.0
-
-
-def first_text(*values: Any) -> str:
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, float) and pd.isna(value):
-            continue
-        text = str(value).strip()
-        if text and text.lower() not in {"nan", "none"}:
-            return text
-    return ""
-
-
-def deep_get(obj: Any, *keys: str) -> Any:
-    cur = obj
-    for key in keys:
-        if isinstance(cur, dict):
-            cur = cur.get(key)
-        else:
-            return None
-    return cur
-
-
-def rentcast_get(endpoint: str, params: Dict[str, Any]) -> Tuple[bool, str, Any]:
-    api_key = get_secret("RENTCAST_API_KEY")
-    if not api_key:
-        return False, "Missing RENTCAST_API_KEY in Streamlit secrets.", None
-
-    headers = {"Accept": "application/json", "X-Api-Key": api_key}
-    url = f"{RENTCAST_BASE_URL}{endpoint}"
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=20)
-        if response.status_code == 401:
-            return False, "RentCast auth failed. Check RENTCAST_API_KEY.", None
-        if response.status_code >= 400:
-            return False, f"RentCast error {response.status_code}: {response.text[:250]}", None
-        return True, "OK", response.json()
-    except Exception as exc:
-        return False, f"RentCast request failed: {exc}", None
-
-
-def extract_property_record(raw: Any) -> Dict[str, Any]:
-    if isinstance(raw, list):
-        record = raw[0] if raw else {}
-    elif isinstance(raw, dict) and isinstance(raw.get("properties"), list):
-        record = raw["properties"][0] if raw["properties"] else {}
-    elif isinstance(raw, dict):
-        record = raw
-    else:
-        record = {}
-
-    taxes = first_number(
-        record.get("propertyTaxes"),
-        record.get("taxAmount"),
-        deep_get(record, "taxAssessments", "2025", "taxAmount"),
-        deep_get(record, "taxAssessments", "2024", "taxAmount"),
-        deep_get(record, "taxAssessments", "2023", "taxAmount"),
-    )
-
-    city = first_text(record.get("city"), deep_get(record, "address", "city"))
-    state = first_text(record.get("state"), deep_get(record, "address", "state"))
-    market = " ".join(x for x in [city, state] if x)
-
-    return {
-        "beds": first_number(record.get("bedrooms"), record.get("beds")),
-        "baths": first_number(record.get("bathrooms"), record.get("baths")),
-        "sqft": first_number(record.get("squareFootage"), record.get("livingArea"), record.get("buildingArea")),
-        "taxes": taxes,
-        "year_built": first_number(record.get("yearBuilt")),
-        "property_type": first_text(record.get("propertyType")),
-        "market": market,
-        "rentcast_address": first_text(record.get("formattedAddress"), record.get("addressLine1"), record.get("address")),
-    }
-
-
-def lookup_rentcast(address: str, beds: float = 0, baths: float = 0, sqft: float = 0) -> SourceResult:
-    if not address.strip():
-        return SourceResult("RentCast", False, "Enter an address first.")
-
-    merged: Dict[str, Any] = {}
-    raw_bundle: Dict[str, Any] = {}
-    messages: List[str] = []
-
-    ok, msg, raw = rentcast_get("/properties", {"address": address, "limit": 1})
-    if ok:
-        raw_bundle["property_record"] = raw
-        merged.update({k: v for k, v in extract_property_record(raw).items() if v not in [None, "", 0]})
-        messages.append("property record")
-    else:
-        messages.append(msg)
-
-    params: Dict[str, Any] = {"address": address, "compCount": 5, "lookupSubjectAttributes": "true"}
-    if beds:
-        params["bedrooms"] = beds
-    if baths:
-        params["bathrooms"] = baths
-    if sqft:
-        params["squareFootage"] = sqft
-
-    ok_rent, msg_rent, raw_rent = rentcast_get("/avm/rent/long-term", params)
-    if ok_rent:
-        raw_bundle["rent_estimate"] = raw_rent
-        merged["rent"] = first_number(
-            raw_rent.get("rent") if isinstance(raw_rent, dict) else None,
-            raw_rent.get("price") if isinstance(raw_rent, dict) else None,
-            raw_rent.get("value") if isinstance(raw_rent, dict) else None,
-        )
-        merged["rent_low"] = first_number(raw_rent.get("rentRangeLow") if isinstance(raw_rent, dict) else None)
-        merged["rent_high"] = first_number(raw_rent.get("rentRangeHigh") if isinstance(raw_rent, dict) else None)
-        messages.append("rent estimate")
-    else:
-        messages.append(msg_rent)
-
-    ok_value, msg_value, raw_value = rentcast_get("/avm/value", params)
-    if ok_value:
-        raw_bundle["value_estimate"] = raw_value
-        merged["arv"] = first_number(
-            raw_value.get("price") if isinstance(raw_value, dict) else None,
-            raw_value.get("value") if isinstance(raw_value, dict) else None,
-            raw_value.get("avm") if isinstance(raw_value, dict) else None,
-        )
-        merged["arv_low"] = first_number(raw_value.get("priceRangeLow") if isinstance(raw_value, dict) else None)
-        merged["arv_high"] = first_number(raw_value.get("priceRangeHigh") if isinstance(raw_value, dict) else None)
-        messages.append("value estimate")
-    else:
-        messages.append(msg_value)
-
-    ok_any = bool(merged)
-    return SourceResult(
-        "RentCast",
-        ok_any,
-        "Pulled " + ", ".join(messages) if ok_any else "; ".join(messages),
-        merged,
-        raw_bundle,
-    )
-
-
-SHEET_COLUMN_MAP = {
-    "asking_price": ["asking_price", "asking price", "price", "list_price", "list price", "zillow_price", "listing price", "max_price", "max price"],
-    "rent": ["rent", "rent_estimate", "rent estimate", "market_rent", "rentcast_rent", "rc_rent_estimate"],
-    "arv": ["arv", "value", "zestimate", "zillow estimate", "estimated_value", "avm", "rentcast_value", "rc_rent_clean"],
-    "beds": ["beds", "bedrooms", "bed"],
-    "baths": ["baths", "bathrooms", "bath"],
-    "sqft": ["sqft", "sq ft", "square_feet", "square feet", "living_area", "livingarea"],
-    "taxes": ["taxes", "annual_taxes", "annual taxes", "property_taxes", "tax amount"],
-    "days_on_market": ["days_on_market", "days on market", "dom", "zillow days on zillow"],
-    "status": ["listing_status", "listing status", "internal_status", "internal status", "status"],
-    "agent_name": ["agent_name", "agent name", "listing_agent", "listing agent", "agent"],
-    "agent_phone": ["agent_phone", "agent phone", "phone", "listing_agent_phone"],
-    "agent_brokerage": ["agent_brokerage", "agent brokerage", "brokerage", "listing brokerage"],
-    "listing_url": ["zillow_link", "zillow link", "zillow_url", "zillow url", "listing_url", "url", "link"],
-    "market": ["market", "city", "location"],
-    "acq_status": ["acq_status", "acq status"],
-    "acq_priority": ["acq_priority", "acq priority"],
-    "last_updated": ["last_updated", "last updated"],
-}
-
-
-ADDRESS_COLUMNS = ["property_address", "property address", "address", "full_address", "full address", "street"]
-MESSAGE_COLUMNS = ["opening_message", "opening message", "follow_up_message", "follow up message"]
-
-
-def find_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-    normalized = {str(c).strip().lower(): c for c in df.columns}
-    for cand in candidates:
-        if cand.lower() in normalized:
-            return normalized[cand.lower()]
-    for col_key, col in normalized.items():
-        for cand in candidates:
-            if cand.lower() in col_key:
-                return col
+def first_existing_column(df: pd.DataFrame, possible_names: list[str]) -> str | None:
+    lower_map = {str(c).strip().lower(): c for c in df.columns}
+    for name in possible_names:
+        found = lower_map.get(name.lower())
+        if found is not None:
+            return found
     return None
 
 
-def extract_address_from_text(value: Any) -> str:
-    text = first_text(value)
-    if not text:
-        return ""
-    # Handles: "Hi, I saw 2104 E Whitmer St, Decatur, IL 62521. Is this..."
-    patterns = [
-        r"(?i)\bsaw\s+(.+?)\.\s+is\b",
-        r"(?i)\bon\s+(.+?)\.\s+were\b",
-        r"(?i)\bon\s+(.+?)\.\s+is\b",
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, text)
-        if m:
-            return m.group(1).strip(" ,.")
-    return ""
-
-
-def add_derived_address(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[str]]:
-    """Return df with a dependable address column, even when MASTER_FEED only has Opening_Message."""
-    temp = df.copy()
-
-    address_col = find_column(temp, ADDRESS_COLUMNS)
-    if address_col is not None:
-        temp["__sheet_address"] = temp[address_col].astype(str)
-        return temp, "__sheet_address"
-
-    message_col = find_column(temp, MESSAGE_COLUMNS)
-    if message_col is not None:
-        temp["__sheet_address"] = temp[message_col].apply(extract_address_from_text)
-        return temp, "__sheet_address"
-
-    return temp, None
-
-
-def extract_sheet_fields(row: pd.Series, df: pd.DataFrame) -> Dict[str, Any]:
-    data: Dict[str, Any] = {}
-    for field, candidates in SHEET_COLUMN_MAP.items():
-        col = find_column(df, candidates)
-        if col is None:
-            continue
-        value = row.get(col)
-        if field in ["asking_price", "rent", "arv", "beds", "baths", "sqft", "taxes", "days_on_market"]:
-            data[field] = first_number(value)
-        else:
-            data[field] = first_text(value)
-    return {k: v for k, v in data.items() if v not in [None, "", 0]}
-
-
-def lookup_google_sheet_csv(address: str, url_secret_name: str, label: str) -> SourceResult:
-    csv_url = get_secret(url_secret_name)
-    if not csv_url:
-        return SourceResult(label, False, f"Missing {url_secret_name}; skipped.")
+def read_csv_url(url: str) -> pd.DataFrame:
+    if not url or not str(url).strip():
+        return pd.DataFrame()
 
     try:
-        df = pd.read_csv(csv_url)
-    except Exception as exc:
-        return SourceResult(label, False, f"Could not read CSV URL: {exc}")
+        return pd.read_csv(str(url).strip())
+    except Exception:
+        return pd.DataFrame()
+
+
+def lookup_google_sheet_csv(address: str, secret_name: str, label: str) -> dict:
+    url = get_secret(secret_name, "")
+    df = read_csv_url(url)
 
     if df.empty:
-        return SourceResult(label, False, "Sheet is empty.")
+        return {"source": label, "found": False, "notes": f"No CSV loaded for {secret_name}."}
 
-    temp, address_col = add_derived_address(df)
-    if address_col is None:
-        return SourceResult(label, False, "No usable address or Opening_Message column found in sheet.")
+    address_col = first_existing_column(
+        df,
+        [
+            "Property_Address",
+            "Address",
+            "Full_Address",
+            "Street_Address",
+            "Property Address",
+            "Opening_Message",
+            "Follow_Up_Message",
+        ],
+    )
+
+    if not address_col:
+        return {"source": label, "found": False, "notes": "No usable address/message column found."}
 
     target = normalize_address(address)
-    if not target:
-        return SourceResult(label, False, "Enter an address first.")
 
-    temp["__norm_address"] = temp[address_col].apply(normalize_address)
-    exact = temp[temp["__norm_address"] == target]
+    df["_norm_address"] = df[address_col].astype(str).map(normalize_address)
 
-    if exact.empty:
-        # Loose match: house number + first street word.
-        parts = target.split()
-        loose_terms = parts[:2] if len(parts) >= 2 else parts
-        if loose_terms:
-            pattern = re.escape(" ".join(loose_terms))
-            exact = temp[temp["__norm_address"].str.contains(pattern, na=False)]
+    matches = df[df["_norm_address"].str.contains(target, na=False, regex=False)]
 
-    if exact.empty:
-        return SourceResult(label, False, "No matching address found in sheet.")
+    if matches.empty:
+        street_only = " ".join(target.split()[:4])
+        matches = df[df["_norm_address"].str.contains(street_only, na=False, regex=False)]
 
-    row = exact.iloc[0]
-    data = extract_sheet_fields(row, temp)
-    data["matched_sheet_address"] = first_text(row.get(address_col))
-    return SourceResult(label, True, "Matched sheet row.", data, row.to_dict())
+    if matches.empty:
+        return {"source": label, "found": False, "notes": "No sheet match found."}
+
+    row = matches.iloc[0].to_dict()
+
+    def get_col(possible_names: list[str], default=""):
+        col = first_existing_column(df, possible_names)
+        return row.get(col, default) if col else default
+
+    asking_price = money_to_float(
+        get_col(["Asking_Price", "Price", "Max_Price", "List_Price", "asking price"], 0)
+    )
+
+    zillow_link = get_col(["Zillow_Link", "Listing_Url", "Listing_URL", "URL", "Link"], "")
+    status = get_col(["Listing_Status", "Status"], "")
+    days_on_market = money_to_float(get_col(["Days_On_Market", "DOM"], 0))
+    agent_name = get_col(["Agent_Name", "Agent", "Listing_Agent"], "")
+    agent_phone = get_col(["Agent_Phone", "Phone"], "")
+    brokerage = get_col(["Agent_Brokerage", "Brokerage"], "")
+    priority = get_col(["Acq_Priority", "Priority"], "")
+    source = get_col(["Source", "Lead_Source"], label)
+
+    return {
+        "source": label,
+        "found": True,
+        "asking_price": asking_price,
+        "zillow_link": zillow_link,
+        "status": status,
+        "days_on_market": days_on_market,
+        "agent_name": agent_name,
+        "agent_phone": agent_phone,
+        "brokerage": brokerage,
+        "priority": priority,
+        "lead_source": source,
+        "matched_address": get_col(["Property_Address", "Address", "Full_Address", "Opening_Message"], ""),
+        "notes": f"Matched sheet address: {get_col(['Property_Address', 'Address', 'Full_Address', 'Opening_Message'], '')}",
+    }
 
 
-def fetch_all_sources(address: str, beds: float = 0, baths: float = 0, sqft: float = 0) -> List[SourceResult]:
-    results: List[SourceResult] = []
-    results.append(lookup_rentcast(address, beds=beds, baths=baths, sqft=sqft))
+def lookup_rentcast(address: str) -> dict:
+    api_key = get_secret("RENTCAST_API_KEY", "")
+    if not api_key:
+        return {"source": "RentCast", "found": False, "notes": "Missing RentCast API key."}
 
-    # Main listing feed. This is the published MASTER_FEED CSV.
-    results.append(lookup_google_sheet_csv(address, "APIFY_ZILLOW_SHEET_CSV_URL", "Apify/Zillow Sheet"))
+    headers = {"X-Api-Key": api_key}
 
-    # Lead sheet is optional. Only call it if a real URL exists. Blank must not crash the app.
-    if get_secret("LEADS_SHEET_CSV_URL"):
-        results.append(lookup_google_sheet_csv(address, "LEADS_SHEET_CSV_URL", "Lead Sheet"))
+    result = {
+        "source": "RentCast",
+        "found": False,
+        "rent": 0,
+        "beds": 0,
+        "baths": 0,
+        "sqft": 0,
+        "arv": 0,
+        "year_built": "",
+        "property_type": "",
+        "notes": "",
+    }
+
+    try:
+        prop_url = "https://api.rentcast.io/v1/properties"
+        prop_resp = requests.get(prop_url, headers=headers, params={"address": address}, timeout=20)
+
+        if prop_resp.status_code == 200:
+            data = prop_resp.json()
+            if isinstance(data, list) and data:
+                p = data[0]
+            elif isinstance(data, dict):
+                p = data
+            else:
+                p = {}
+
+            result["found"] = True
+            result["beds"] = p.get("bedrooms") or p.get("beds") or 0
+            result["baths"] = p.get("bathrooms") or p.get("baths") or 0
+            result["sqft"] = p.get("squareFootage") or p.get("sqft") or 0
+            result["year_built"] = p.get("yearBuilt") or ""
+            result["property_type"] = p.get("propertyType") or ""
+            result["arv"] = p.get("price") or p.get("value") or 0
+
+        rent_url = "https://api.rentcast.io/v1/avm/rent/long-term"
+        rent_resp = requests.get(rent_url, headers=headers, params={"address": address}, timeout=20)
+
+        if rent_resp.status_code == 200:
+            rent_data = rent_resp.json()
+            result["found"] = True
+            result["rent"] = (
+                rent_data.get("rent")
+                or rent_data.get("rentEstimate")
+                or rent_data.get("price")
+                or rent_data.get("value")
+                or 0
+            )
+
+        result["notes"] = f"Auto-pulled data: Year Built: {result.get('year_built')} | Property Type: {result.get('property_type')}"
+        return result
+
+    except Exception as e:
+        result["notes"] = f"RentCast lookup error: {e}"
+        return result
+
+
+def merge_results(results: list[dict]) -> dict:
+    merged = {
+        "address": "",
+        "market": "",
+        "asking_price": 0,
+        "rent": 0,
+        "beds": 0,
+        "baths": 0,
+        "sqft": 0,
+        "arv": 0,
+        "status": "Unknown",
+        "days_on_market": 0,
+        "zillow_link": "",
+        "agent_name": "",
+        "agent_phone": "",
+        "brokerage": "",
+        "priority": "",
+        "lead_source": "",
+        "notes": "",
+        "sources_found": [],
+    }
+
+    notes = []
+
+    for r in results:
+        if not r or not r.get("found"):
+            if r and r.get("notes"):
+                notes.append(r.get("notes"))
+            continue
+
+        merged["sources_found"].append(r.get("source", "Unknown"))
+
+        for key in [
+            "asking_price",
+            "rent",
+            "beds",
+            "baths",
+            "sqft",
+            "arv",
+            "status",
+            "days_on_market",
+            "zillow_link",
+            "agent_name",
+            "agent_phone",
+            "brokerage",
+            "priority",
+            "lead_source",
+        ]:
+            value = r.get(key)
+            if value not in [None, "", 0, 0.0, "Unknown"]:
+                merged[key] = value
+
+        if r.get("notes"):
+            notes.append(r.get("notes"))
+
+    merged["notes"] = " | ".join(notes)
+    return merged
+
+
+def fetch_all_sources(
+    address: str,
+    source_mode: str = "Zillow / Sheet Match",
+    lead_source: str = "Zillow / Apify",
+    include_listing_sheet: bool = True,
+    include_lead_sheet: bool = False,
+) -> list[dict]:
+    results = []
+
+    results.append(lookup_rentcast(address))
+
+    if source_mode == "Zillow / Sheet Match" and include_listing_sheet:
+        results.append(
+            lookup_google_sheet_csv(
+                address,
+                "APIFY_ZILLOW_SHEET_CSV_URL",
+                "Master Feed CSV",
+            )
+        )
+
+    if include_lead_sheet:
+        results.append(
+            lookup_google_sheet_csv(
+                address,
+                "LEADS_SHEET_CSV_URL",
+                "Lead Sheet CSV",
+            )
+        )
 
     return results
-
-
-def merge_results(results: List[SourceResult]) -> Dict[str, Any]:
-    """Merge results. Listing sheet wins asking/status/link; RentCast wins rent/value/property facts."""
-    merged: Dict[str, Any] = {}
-
-    for source_name in ["Apify/Zillow Sheet", "Lead Sheet", "RentCast"]:
-        for result in results:
-            if result.source == source_name and result.ok:
-                for key, value in result.data.items():
-                    if value not in [None, "", 0]:
-                        merged[key] = value
-
-    # Prefer RentCast rent/arv/facts if available.
-    for result in results:
-        if result.source == "RentCast" and result.ok:
-            for key in ["rent", "arv", "beds", "baths", "sqft", "taxes", "market", "year_built", "property_type"]:
-                value = result.data.get(key)
-                if value not in [None, "", 0]:
-                    merged[key] = value
-
-    # Prefer listing sheet for asking/status/DOM/agent/listing URL.
-    for source_name in ["Apify/Zillow Sheet", "Lead Sheet"]:
-        for result in results:
-            if result.source == source_name and result.ok:
-                for key in [
-                    "asking_price",
-                    "status",
-                    "days_on_market",
-                    "agent_name",
-                    "agent_phone",
-                    "agent_brokerage",
-                    "listing_url",
-                    "matched_sheet_address",
-                    "acq_status",
-                    "acq_priority",
-                    "last_updated",
-                ]:
-                    value = result.data.get(key)
-                    if value not in [None, "", 0]:
-                        merged[key] = value
-
-    return merged
