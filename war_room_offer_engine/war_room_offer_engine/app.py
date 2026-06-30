@@ -150,41 +150,41 @@ if pull_data:
         st.session_state["last_auto_pull"] = merged
         update_state_from_auto_pull(merged)
 
-  good_sources = []
-
-for item in results:
-    if isinstance(item, dict):
-        if item.get("found"):
-            good_sources.append(item.get("source", "Unknown"))
-    else:
-        if getattr(item, "ok", False):
-            good_sources.append(getattr(item, "source", "Unknown"))
-
-if good_sources:
-    st.success("Pulled data from: " + ", ".join(good_sources))
-else:
-    st.warning("No data pulled yet. Add Streamlit secrets or verify the address. Manual analysis still works.")
-if st.session_state.get("last_source_results"):
-    with st.expander("Data pull results"):
-        for result in st.session_state["last_source_results"]:
-            if st.session_state.get("last_source_results"):
-    with st.expander("Data pull results"):
-        for result in st.session_state["last_source_results"]:
-            if isinstance(result, dict):
-                source = result.get("source", "Unknown")
-                found = result.get("found") or result.get("ok")
-                message = result.get("notes") or result.get("message") or ""
+        good_sources = []
+        for item in results:
+            if isinstance(item, dict):
+                if item.get("found") or item.get("ok"):
+                    good_sources.append(item.get("source", "Unknown"))
             else:
-                source = getattr(result, "source", "Unknown")
-                found = getattr(result, "ok", False) or getattr(result, "found", False)
-                message = getattr(result, "message", "") or getattr(result, "notes", "")
+                if getattr(item, "ok", False) or getattr(item, "found", False):
+                    good_sources.append(getattr(item, "source", "Unknown"))
 
-            if found:
-                st.success(f"{source}: {message}")
-            else:
-                st.info(f"{source}: {message}")
+        if good_sources:
+            st.success("Pulled data from: " + ", ".join(good_sources))
+        else:
+            st.warning("No data pulled yet. Add Streamlit secrets or verify the address. Manual analysis still works.")
 
-st.subheader("2. Property Inputs")
+        with st.expander("Data pull results"):
+            for result in results:
+                if isinstance(result, dict):
+                    source = result.get("source", "Unknown")
+                    found = result.get("found") or result.get("ok")
+                    message = result.get("notes") or result.get("message") or ""
+                    data = result.get("data", None)
+                else:
+                    source = getattr(result, "source", "Unknown")
+                    found = getattr(result, "ok", False) or getattr(result, "found", False)
+                    message = getattr(result, "message", "") or getattr(result, "notes", "")
+                    data = getattr(result, "data", None)
+
+                if found:
+                    st.success(f"{source}: {message}")
+                    if data:
+                        st.write(data)
+                else:
+                    st.info(f"{source}: {message}") 
+
+       
 st.caption("Works for Zillow, MLS, agent leads, and off-market sellers. Slow Flip uses rent/livability; ARV and repairs are reference unless you switch to Wholesale/Auto.")
 
 exit_mode = st.radio(
