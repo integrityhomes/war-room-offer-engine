@@ -143,7 +143,7 @@ if pull_data:
             baths=float(st.session_state.get("baths", 0) or 0),
             sqft=float(st.session_state.get("sqft", 0) or 0),
             include_listing_sheet=include_listing_sheet,
-            include_lead_sheet=include_listing_sheet,
+            
         )
         merged = merge_results(results)
         st.session_state["last_source_results"] = results
