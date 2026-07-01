@@ -255,7 +255,32 @@ with col3:
         accept_multiple_files=True,
         key="repair_media_files",
     )
+        media_files_for_notes = uploaded_repair_files or []
 
+    photo_files_for_notes = [
+        f for f in media_files_for_notes
+        if str(getattr(f, "name", "")).lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+    ]
+
+    video_files_for_notes = [
+        f for f in media_files_for_notes
+        if str(getattr(f, "name", "")).lower().endswith((".mp4", ".mov", ".m4v", ".avi"))
+    ]
+
+    selected_video_for_notes = video_files_for_notes[0] if video_files_for_notes else None
+
+    if st.button("Generate boots-on-ground notes from media", type="secondary"):
+        if not photo_files_for_notes and selected_video_for_notes is None:
+            st.warning("Upload at least one photo or video first.")
+        else:
+            with st.spinner("Reviewing uploaded photos/video frames and writing boots-on-ground notes..."):
+                generated_notes = generate_boots_on_ground_notes(
+                    photo_files_for_notes,
+                    selected_video_for_notes,
+                )
+
+            st.session_state["repair_notes"] = generated_notes
+            st.success("Boots-on-ground notes created. Review them below, then click Generate Repair Estimate.") 
     repair_notes = st.text_area(
         "Boots-on-ground repair notes",
         height=140,
