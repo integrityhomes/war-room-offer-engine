@@ -7,6 +7,7 @@ from rules import Assumptions, DealInput, analyze_deal, money
 from ai_writer import build_ai_summary
 from data_sources import fetch_all_sources, merge_results, get_secret
 from repair_analyzer import analyze_repairs, repair_number_for_offer
+from media_notes import generate_boots_on_ground_notes
 st.set_page_config(page_title="War Room Offer Engine", page_icon="🏠", layout="wide")
 
 FIELD_DEFAULTS = {
