@@ -212,7 +212,122 @@ with col3:
     st.number_input("Baths", min_value=0.0, step=0.5, key="baths")
     st.number_input("Sq ft", min_value=0, step=50, key="sqft")
     st.number_input("Annual taxes", min_value=0, step=100, key="taxes")
+    st.subheader("3. Repair / Condition Analyzer")
+    st.caption(
+        "Uses non-Chicago Illinois investor repair pricing only. "
+        "Upload photos/videos and add boots-on-ground notes. "
+        "This version prices the repair scope from the notes and uploaded media count. "
+        "Full AI video frame review and audio transcription will be added next."
+    )
 
+    r1, r2, r3 = st.columns(3)
+
+    with r1:
+        repair_market = st.selectbox(
+            "Repair pricing market",
+            ["Central IL", "Downstate IL", "Metro East IL", "Northern IL Non-Chicago"],
+            index=0,
+            key="repair_market",
+        )
+
+    with r2:
+        repair_level = st.selectbox(
+            "Repair finish level",
+            ["Investor Basic", "Rental Ready", "Retail Ready"],
+            index=1,
+            key="repair_level",
+        )
+
+    with r3:
+        repair_contingency = st.number_input(
+            "Repair contingency %",
+            min_value=0,
+            max_value=40,
+            value=12,
+            step=1,
+            key="repair_contingency",
+        )
+
+    uploaded_repair_files = st.file_uploader(
+        "Upload property photos or boots-on-ground walkthrough video",
+        type=["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v", "avi"],
+        accept_multiple_files=True,
+        key="repair_media_files",
+    )
+
+    repair_notes = st.text_area(
+        "Boots-on-ground repair notes",
+        height=140,
+        key="repair_notes",
+        placeholder=(
+            "Example: Roof looks old, kitchen needs cabinets, bathroom floor is soft, "
+            "furnace missing, water heater old, windows damaged, trash out needed."
+        ),
+    )
+
+    generate_repair_estimate = st.button("Generate Repair Estimate", type="secondary")
+
+    if generate_repair_estimate:
+        repair_analysis = analyze_repairs(
+            notes=st.session_state.get("repair_notes", ""),
+            sqft=float(st.session_state.get("sqft", 0) or 1000),
+            baths=float(st.session_state.get("baths", 0) or 1),
+            uploaded_files=uploaded_repair_files,
+            market=st.session_state.get("repair_market", "Central IL"),
+            repair_level=st.session_state.get("repair_level", "Rental Ready"),
+            contingency_pct=float(st.session_state.get("repair_contingency", 12) or 0) / 100,
+        )
+
+        st.session_state["repair_analysis"] = repair_analysis
+        st.session_state["recommended_repairs_from_analyzer"] = repair_number_for_offer(repair_analysis)
+
+    if st.session_state.get("repair_analysis"):
+        repair_analysis = st.session_state["repair_analysis"]
+        estimate = repair_analysis.get("estimate", {})
+
+        st.markdown("#### Repair Estimate Result")
+
+        e1, e2, e3, e4 = st.columns(4)
+
+        with e1:
+            st.metric("Low Repairs", money(estimate.get("total_low", 0)))
+
+        with e2:
+            st.metric("Likely Repairs", money(estimate.get("total_likely", 0)))
+
+        with e3:
+            st.metric("High Repairs", money(estimate.get("total_high", 0)))
+
+        with e4:
+            st.metric("Use In Offer", money(repair_analysis.get("recommended_repair_number", 0)))
+
+        st.info(f"Confidence: {repair_analysis.get('confidence', 'Low')}")
+
+        if repair_analysis.get("red_flags"):
+            st.error(
+                "Red flags needing contractor quote: "
+                + ", ".join(repair_analysis.get("red_flags", []))
+            )
+
+        line_items = estimate.get("line_items", [])
+
+        if line_items:
+            st.dataframe(
+                pd.DataFrame(line_items)[
+                    ["category", "label", "quantity", "unit", "low", "likely", "high", "notes"]
+                ],
+                use_container_width=True,
+            )
+
+        st.text_area(
+            "Repair estimate summary",
+            value=repair_analysis.get("summary", ""),
+            height=260,
+        )
+
+        if st.button("Use likely repair number in offer", type="primary"):
+            st.session_state["repairs"] = int(repair_analysis.get("recommended_repair_number", 0) or 0)
+            st.success("Repair number copied into Estimated repairs. Scroll down and confirm it before analyzing the deal.")
     st.markdown("### Value / Wholesale Reference")
 
     v1, v2 = st.columns(2)
