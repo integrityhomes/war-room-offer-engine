@@ -245,6 +245,13 @@ def analyze_deal(deal: DealInput, assumptions: Assumptions | None = None) -> Dic
 
     grade = grade_deal(best, deal.asking_price, a) if best_exit != "Pass" else "Pass"
     risks = risk_notes(deal, best_exit)
+        slow_flip_resale = slow_flip.get("resale_to_slow_flipper", slow_flip.get("resale to slow flipper", 0))
+
+    if slow_flip_resale >= 50000:
+        if deal.rent < 1200:
+            risks.append("$50k+ slow-flipper resale warning: payment support is under $1,200/month. Still show the resale price, but verify a slow flipper can actually sell this payment.")
+        if deal.taxes > 1500:
+            risks.append("$50k+ slow-flipper resale warning: taxes are over $1,500/year. Still show the resale price, but verify taxes do not make the buyer payment too high.")  
     if best.get("exit") == "Slow Flip" and deal.asking_price > best.get("max_offer", 0) > 0:
         risks.insert(0, f"Asking price is above the normal slow-flip max of {money(best.get('max_offer', 0))}. Do not chase unless there is a pre-committed buyer or Shawn/Sabrina approves the exception.")
     if best.get("exit") == "Slow Flip" and best.get("rent_formula_max_offer_before_cap", 0) > best.get("max_offer", 0):
