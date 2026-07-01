@@ -18,6 +18,7 @@ FIELD_DEFAULTS = {
     "lead_type": "Agent",
     "status": "Unknown",
     "asking_price": 35000,
+    "contract_price": 0,
     "rent": 900,
     "occupancy": "Unknown",
     "livable": "Unknown",
@@ -204,6 +205,7 @@ with col1:
 
 with col2:
     st.number_input("Asking price", min_value=0, step=1000, key="asking_price")
+    st.number_input("Contract / Buy Price", min_value=0, step=1000, key="contract_price")
     st.number_input("Rent estimate", min_value=0, step=25, key="rent")
     st.selectbox("Occupancy", ["Unknown", "Vacant", "Tenant occupied", "Owner occupied"], key="occupancy")
     st.selectbox("Livable now?", ["Unknown", "Yes", "No"], key="livable")
@@ -385,12 +387,15 @@ st.caption(f"Current source: {st.session_state.get('source_mode')} / {st.session
 analyze = st.button("Analyze Deal", type="primary")
 
 if analyze:
+    asking_price_value = float(st.session_state.get("asking_price", 0) or 0)
+    contract_price_value = float(st.session_state.get("contract_price", 0) or 0)
+    analysis_price = contract_price_value if contract_price_value > 0 else asking_price_value
     deal = DealInput(
         address=st.session_state["address"],
         market=st.session_state["market"],
         lead_type=st.session_state["lead_type"],
         exit_mode=exit_mode,
-        asking_price=float(st.session_state["asking_price"]),
+        asking_price=analysis_price,
         rent=float(st.session_state["rent"]),
         beds=float(st.session_state["beds"]),
         baths=float(st.session_state["baths"]),
