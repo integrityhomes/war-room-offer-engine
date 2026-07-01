@@ -255,7 +255,7 @@ with col3:
         accept_multiple_files=True,
         key="repair_media_files",
     )
-        media_files_for_notes = uploaded_repair_files or []
+    media_files_for_notes = uploaded_repair_files or []
 
     photo_files_for_notes = [
         f for f in media_files_for_notes
