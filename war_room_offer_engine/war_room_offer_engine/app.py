@@ -412,8 +412,16 @@ if analyze:
 
     result = analyze_deal(deal, assumptions)
     best = result["best"]
-
+    discount_from_ask = asking_price_value - contract_price_value if contract_price_value > 0 else 0
+    analysis_price_label = "Contract / Buy Price" if contract_price_value > 0 else "Asking Price"
     st.divider()
+    st.subheader("Price Snapshot")
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Asking Price", money(asking_price_value))
+    p2.metric("Contract / Buy Price", money(contract_price_value) if contract_price_value > 0 else "Not set")
+    p3.metric("Discount From Ask", money(discount_from_ask) if contract_price_value > 0 else "—")
+    p4.metric("Analysis Price Used", money(analysis_price))
+    st.caption(f"Deal math is using {analysis_price_label}.")
     st.subheader("Decision")
 
     m1, m2, m3, m4 = st.columns(4)
