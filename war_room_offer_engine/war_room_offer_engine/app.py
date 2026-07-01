@@ -213,16 +213,30 @@ with col3:
     st.number_input("Sq ft", min_value=0, step=50, key="sqft")
     st.number_input("Annual taxes", min_value=0, step=100, key="taxes")
 
-show_wholesale_info = exit_mode in ["Wholesale Only", "Auto"] or st.session_state.get("arv", 0) > 0
-if show_wholesale_info:
-    st.markdown("### Value / Wholesale Info")
-    w1, w2 = st.columns(2)
-    with w1:
-        st.number_input("ARV / estimated resale", min_value=0, step=1000, key="arv")
-    with w2:
-        st.number_input("Estimated repairs", min_value=0, step=1000, key="repairs")
-else:
-    st.info("Slow Flip mode uses rent × multiple. ARV and repairs are not required, but value data will show here after RentCast pulls it.")
+    st.markdown("### Value / Wholesale Reference")
+
+    v1, v2 = st.columns(2)
+
+    with v1:
+        st.number_input(
+            "ARV / estimated resale value",
+            min_value=0,
+            step=1000,
+            key="arv",
+            help="Required on every deal. Zillow/RentCast may auto-fill this, but you can override it.",
+        )
+
+    with v2:
+        st.number_input(
+            "Estimated repairs",
+            min_value=0,
+            step=1000,
+            key="repairs",
+            help="Use $0 only when repairs are truly unknown or not needed for the slow-flip decision.",
+        )
+
+    if float(st.session_state.get("arv", 0) or 0) <= 0:
+        st.warning("ARV is missing. Add ARV before making a final offer.")
 
 st.text_area("Seller/agent notes, condition, occupancy, motivation", height=120, key="notes")
 st.caption(f"Current source: {st.session_state.get('source_mode')} / {st.session_state.get('lead_source')}")
