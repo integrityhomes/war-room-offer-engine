@@ -434,7 +434,12 @@ if analyze:
             "Normal slow flip cap": money(slow.get("normal_slow_flip_cap", 0)),
             "Estimated fee at buy price": money(slow["estimated_fee_at_ask"]),
         })
+                     slow_resale_value = float(slow.get("resale_to_slow_flipper", 0) or 0)
+        buyer_payment_support = float(st.session_state.get("rent", 0) or 0)
+        annual_taxes_value = float(st.session_state.get("taxes", 0) or 0)
 
+        if slow_resale_value >= 50000 and (buyer_payment_support < 1200 or annual_taxes_value > 1500):
+            st.warning("$50k+ slow-flip resale warning: still show the resale price, but only push it hard if buyer payment support is about $1,200/month and taxes are low enough.")
     with c2:
         st.subheader("Value / Wholesale Reference")
         wholesale = result["wholesale"]
