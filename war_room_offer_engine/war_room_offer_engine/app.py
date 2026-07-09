@@ -223,7 +223,7 @@ with col3:
         "Full AI video frame review and audio transcription will be added next."
     )
 
-        repair_market = st.selectbox(
+    repair_market = st.selectbox(
         "Repair pricing market",
         [
             "Central IL",
