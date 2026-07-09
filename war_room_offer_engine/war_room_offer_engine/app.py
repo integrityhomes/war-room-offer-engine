@@ -434,7 +434,7 @@ if analyze:
             "Normal slow flip cap": money(slow.get("normal_slow_flip_cap", 0)),
             "Estimated fee at buy price": money(slow["estimated_fee_at_ask"]),
         })
-                     slow_resale_value = float(slow.get("resale_to_slow_flipper", 0) or 0)
+        slow_resale_value = float(slow.get("resale_to_slow_flipper", 0) or 0)
         buyer_payment_support = float(st.session_state.get("rent", 0) or 0)
         annual_taxes_value = float(st.session_state.get("taxes", 0) or 0)
 
@@ -444,11 +444,11 @@ if analyze:
         st.subheader("Value / Wholesale Reference")
         wholesale = result["wholesale"]
         st.write({
-            "ARV / estimated value": money(st.session_state.get("arv", 0)),
-            "Repairs": money(st.session_state.get("repairs", 0)),
-            "Buyer target": money(wholesale["buyer_target"]),
-            "Wholesale max offer": money(wholesale["max_offer"]),
-            "Wholesale estimated fee at buy price": money(wholesale["estimated_fee_at_ask"])
+        "ARV / estimated value": money(st.session_state.get("arv", 0)),
+        "Repairs": money(st.session_state.get("repairs", 0)),
+        "Buyer target": money(wholesale["buyer_target"]),
+        "Wholesale max offer": money(wholesale["max_offer"]),
+        "Wholesale estimated fee at buy price": money(wholesale["estimated_fee_at_ask"])
         })
 
     st.subheader("Risk Notes")
