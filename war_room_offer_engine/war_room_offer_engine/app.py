@@ -71,14 +71,14 @@ def resolve_value_source() -> tuple[float, str]:
     comps_arv = manual_comps_average()
     manual_override = safe_float(st.session_state.get("manual_arv_override", 0))
 
+    if manual_override > 0:
+        return manual_override, "Manual Override"
     if rentcast_arv > 0:
         return rentcast_arv, "RentCast"
     if sheet_arv > 0:
         return sheet_arv, "Zillow/Apify Sheet"
     if comps_arv > 0:
         return comps_arv, "Manual Comps"
-    if manual_override > 0:
-        return manual_override, "Manual Override"
     return 0.0, "Missing"
 
 
@@ -472,7 +472,7 @@ with col3:
         min_value=0,
         step=1000,
         key="manual_arv_override",
-        help="Fallback only. RentCast ARV, sheet ARV, then manual comps are used first.",
+        help="Highest priority. Use this when you want to override RentCast, sheet ARV, or manual comps.",
     )
 
     resolved_arv, value_source = resolve_value_source()
