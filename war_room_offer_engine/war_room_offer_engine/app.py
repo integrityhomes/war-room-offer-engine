@@ -432,7 +432,7 @@ if analyze:
             "Internal max offer": money(slow["max_offer"]),
             "Rent formula max before cap": money(slow.get("rent_formula_max_offer_before_cap", 0)),
             "Normal slow flip cap": money(slow.get("normal_slow_flip_cap", 0)),
-            "Estimated fee at asking": money(slow["estimated_fee_at_ask"]),
+            "Estimated fee at buy price": money(slow["estimated_fee_at_ask"]),
         })
 
     with c2:
@@ -443,7 +443,7 @@ if analyze:
             "Repairs": money(st.session_state.get("repairs", 0)),
             "Buyer target": money(wholesale["buyer_target"]),
             "Wholesale max offer": money(wholesale["max_offer"]),
-            "Wholesale estimated fee at asking": money(wholesale["estimated_fee_at_ask"]),
+            "Wholesale estimated fee at buy price": money(wholesale["estimated_fee_at_ask"])
         })
 
     st.subheader("Risk Notes")
