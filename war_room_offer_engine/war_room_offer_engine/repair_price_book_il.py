@@ -313,7 +313,7 @@ REPAIR_PRICE_BOOK: dict[str, RepairPrice] = {
         30000,
         "Always flag for contractor quote.",
     ),
-    "sewer_line": RepairPrice(
+        "sewer_line": RepairPrice(
         "Red Flag",
         "Sewer line allowance",
         "each",
@@ -321,6 +321,36 @@ REPAIR_PRICE_BOOK: dict[str, RepairPrice] = {
         6500,
         15000,
         "Always flag for sewer scope if suspected.",
+             "sewer_line": RepairPrice(
+        "Red Flag",
+        "Sewer line allowance",
+        "each",
+        2500,
+        6500,
+        15000,
+        "Always flag for sewer scope if suspected.",
+    ),
+
+    "crawlspace_vapor_barrier": RepairPrice(
+        "Virginia / Crawlspace",
+        "Crawlspace vapor barrier / moisture control",
+        "each",
+        1200,
+        2500,
+        6000,
+        "Virginia crawlspaces often need moisture control, vapor barrier, and possible wood repair.",
+    ),
+    ...
+    "fuse_box_panel_upgrade": RepairPrice(
+        "Virginia / Electrical",
+        "Fuse box / old panel upgrade allowance",
+        "each",
+        1800,
+        3500,
+        7500,
+        "Use when fuse box, knob and tube, aluminum wiring, or old electrical panel is mentioned.",
+    ),
+}
     ),
 }
 
