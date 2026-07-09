@@ -326,10 +326,23 @@ REPAIR_PRICE_BOOK: dict[str, RepairPrice] = {
 
 
 MARKET_MULTIPLIERS = {
+    # Illinois - non-Chicago investor pricing
     "Downstate IL": 0.95,
     "Central IL": 1.00,
     "Metro East IL": 1.05,
     "Northern IL Non-Chicago": 1.10,
+
+    # Virginia investor pricing
+    "Southside VA": 1.03,
+    "Southwest VA": 1.00,
+    "Roanoke / Lynchburg VA": 1.05,
+    "Richmond / Petersburg VA": 1.12,
+    "Hampton Roads / Tidewater VA": 1.15,
+    "Shenandoah Valley VA": 1.08,
+    "Charlottesville / Central VA": 1.15,
+    "Fredericksburg / Northern Neck VA": 1.18,
+    "Eastern Shore VA": 1.12,
+    "Northern VA": 1.35,
 }
 
 
