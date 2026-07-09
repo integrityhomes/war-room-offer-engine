@@ -345,6 +345,19 @@ MARKET_MULTIPLIERS = {
     "Northern VA": 1.35,
 }
 
+    # Virginia investor pricing
+    "Southside VA": 1.03,
+    "Southwest VA": 1.00,
+    "Roanoke / Lynchburg VA": 1.05,
+    "Richmond / Petersburg VA": 1.12,
+    "Hampton Roads / Tidewater VA": 1.15,
+    "Shenandoah Valley VA": 1.08,
+    "Charlottesville / Central VA": 1.15,
+    "Fredericksburg / Northern Neck VA": 1.18,
+    "Eastern Shore VA": 1.12,
+    "Northern VA": 1.35,
+}
+
 
 REPAIR_LEVEL_MULTIPLIERS = {
     "Investor Basic": 0.90,
