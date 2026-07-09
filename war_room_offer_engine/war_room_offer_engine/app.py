@@ -223,29 +223,29 @@ with col3:
         "Full AI video frame review and audio transcription will be added next."
     )
 
-    r1, r2, r3 = st.columns([3, 1, 1])
-    with r1:
         repair_market = st.selectbox(
-            "Repair pricing market",
-           [
-    "Central IL",
-    "Downstate IL",
-    "Metro East IL",
-    "Northern IL Non-Chicago",
-    "Southside VA",
-    "Southwest VA",
-    "Roanoke / Lynchburg VA",
-    "Richmond / Petersburg VA",
-    "Hampton Roads / Tidewater VA",
-    "Shenandoah Valley VA",
-    "Charlottesville / Central VA",
-    "Fredericksburg / Northern Neck VA",
-    "Eastern Shore VA",
-    "Northern VA",      
-     ],           
-            index=0,
-            key="repair_market",
-        )
+        "Repair pricing market",
+        [
+            "Central IL",
+            "Downstate IL",
+            "Metro East IL",
+            "Northern IL Non-Chicago",
+            "Southside VA",
+            "Southwest VA",
+            "Roanoke / Lynchburg VA",
+            "Richmond / Petersburg VA",
+            "Hampton Roads / Tidewater VA",
+            "Shenandoah Valley VA",
+            "Charlottesville / Central VA",
+            "Fredericksburg / Northern Neck VA",
+            "Eastern Shore VA",
+            "Northern VA",
+        ],
+        index=0,
+        key="repair_market",
+    )
+
+    r2, r3 = st.columns(2)
 
     with r2:
         repair_level = st.selectbox(
@@ -259,12 +259,11 @@ with col3:
         repair_contingency = st.number_input(
             "Repair contingency %",
             min_value=0,
-            max_value=40,
+            max_value=50,
             value=12,
             step=1,
             key="repair_contingency",
         )
-
     uploaded_repair_files = st.file_uploader(
         "Upload property photos or boots-on-ground walkthrough video",
         type=["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v", "avi"],
