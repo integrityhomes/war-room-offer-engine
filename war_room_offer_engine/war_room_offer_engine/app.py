@@ -217,7 +217,7 @@ with col3:
     st.number_input("Annual taxes", min_value=0, step=100, key="taxes")
     st.subheader("3. Repair / Condition Analyzer")
     st.caption(
-        "Uses non-Chicago Illinois investor repair pricing only. "
+        "Uses investor repair pricing by selected market. Illinois and Virginia active. "
         "Upload photos/videos and add boots-on-ground notes. "
         "This version prices the repair scope from the notes and uploaded media count. "
         "Full AI video frame review and audio transcription will be added next."
