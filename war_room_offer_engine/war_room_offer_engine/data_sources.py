@@ -241,6 +241,7 @@ def lookup_google_sheet_csv(address: str, secret_name: str, label: str) -> dict:
         "baths": baths,
         "sqft": sqft,
         "arv": arv,
+        "arv_source": "Zillow/Apify Sheet" if arv > 0 else "",
         "taxes": taxes,
         "zillow_link": zillow_link,
         "listing_url": zillow_link,
@@ -278,6 +279,7 @@ def lookup_rentcast(
         "baths": 0,
         "sqft": 0,
         "arv": 0,
+        "arv_source": "",
         "taxes": 0,
         "year_built": "",
         "property_type": "",
@@ -363,6 +365,8 @@ def lookup_rentcast(
                 or value_data.get("estimatedValue")
                 or 0
             )
+            if result["arv"]:
+                result["arv_source"] = "RentCast"
 
             subject = value_data.get("subjectProperty") or {}
             if subject:
@@ -404,6 +408,9 @@ def merge_results(results: list[dict]) -> dict:
         "sqft": 0,
         "taxes": 0,
         "arv": 0,
+        "arv_source": "Missing",
+        "rentcast_arv": 0,
+        "sheet_arv": 0,
         "status": "Unknown",
         "days_on_market": 0,
         "zillow_link": "",
@@ -432,6 +439,13 @@ def merge_results(results: list[dict]) -> dict:
             continue
 
         merged["sources_found"].append(r.get("source", "Unknown"))
+        source_name = str(r.get("source", ""))
+        arv_value = r.get("arv")
+        if arv_value not in [None, "", 0, 0.0]:
+            if source_name == "RentCast":
+                merged["rentcast_arv"] = arv_value
+            elif source_name in ["Master Feed CSV", "Lead Sheet CSV"]:
+                merged["sheet_arv"] = arv_value
 
         for key in [
             "asking_price",
@@ -441,6 +455,7 @@ def merge_results(results: list[dict]) -> dict:
             "sqft",
             "taxes",
             "arv",
+            "arv_source",
             "status",
             "days_on_market",
             "zillow_link",
@@ -463,6 +478,15 @@ def merge_results(results: list[dict]) -> dict:
             notes.append(r.get("notes"))
 
     merged["notes"] = " | ".join(notes)
+
+    if merged.get("rentcast_arv"):
+        merged["arv"] = merged["rentcast_arv"]
+        merged["arv_source"] = "RentCast"
+    elif merged.get("sheet_arv"):
+        merged["arv"] = merged["sheet_arv"]
+        merged["arv_source"] = "Zillow/Apify Sheet"
+    elif not merged.get("arv"):
+        merged["arv_source"] = "Missing"
 
     return merged
 
