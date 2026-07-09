@@ -28,6 +28,10 @@ FIELD_DEFAULTS = {
     "taxes": 0,
     "days_on_market": 0,
     "arv": 0,
+    "rentcast_arv": 0,
+    "sheet_arv": 0,
+    "manual_arv_override": 0,
+    "value_source": "Missing",
     "repairs": 0,
     "notes": "",
 }
@@ -36,6 +40,46 @@ for key, value in FIELD_DEFAULTS.items():
     st.session_state.setdefault(key, value)
 st.session_state.setdefault("last_source_results", [])
 st.session_state.setdefault("last_auto_pull", {})
+
+
+def safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value or default)
+    except Exception:
+        return default
+
+
+def comp_price_values() -> list[float]:
+    prices = []
+    for idx in range(1, 6):
+        price = safe_float(st.session_state.get(f"manual_comp_{idx}_price", 0))
+        if price > 0:
+            prices.append(price)
+    return prices
+
+
+def manual_comps_average() -> float:
+    prices = comp_price_values()
+    if not prices:
+        return 0.0
+    return sum(prices) / len(prices)
+
+
+def resolve_value_source() -> tuple[float, str]:
+    rentcast_arv = safe_float(st.session_state.get("rentcast_arv", 0))
+    sheet_arv = safe_float(st.session_state.get("sheet_arv", 0))
+    comps_arv = manual_comps_average()
+    manual_override = safe_float(st.session_state.get("manual_arv_override", 0))
+
+    if rentcast_arv > 0:
+        return rentcast_arv, "RentCast"
+    if sheet_arv > 0:
+        return sheet_arv, "Zillow/Apify Sheet"
+    if comps_arv > 0:
+        return comps_arv, "Manual Comps"
+    if manual_override > 0:
+        return manual_override, "Manual Override"
+    return 0.0, "Missing"
 
 
 def update_state_from_auto_pull(data: dict) -> None:
@@ -50,11 +94,14 @@ def update_state_from_auto_pull(data: dict) -> None:
         "days_on_market": "days_on_market",
         "status": "status",
         "arv": "arv",
+        "rentcast_arv": "rentcast_arv",
+        "sheet_arv": "sheet_arv",
+        "arv_source": "value_source",
     }
     for source_key, state_key in mapping.items():
         value = data.get(source_key)
         if value not in [None, "", 0]:
-            if state_key in ["asking_price", "rent", "sqft", "taxes", "days_on_market", "arv"]:
+            if state_key in ["asking_price", "rent", "sqft", "taxes", "days_on_market", "arv", "rentcast_arv", "sheet_arv"]:
                 st.session_state[state_key] = int(float(value))
             elif state_key in ["beds", "baths"]:
                 st.session_state[state_key] = float(value)
@@ -70,6 +117,10 @@ def update_state_from_auto_pull(data: dict) -> None:
         current = st.session_state.get("notes", "")
         auto_note = "Auto-pulled data: " + " | ".join(note_bits)
         st.session_state["notes"] = (current + "\n" + auto_note).strip() if current else auto_note
+
+    resolved_arv, value_source = resolve_value_source()
+    st.session_state["arv"] = int(resolved_arv) if resolved_arv > 0 else 0
+    st.session_state["value_source"] = value_source
 
 
 st.title("🏠 War Room Offer Engine")
@@ -369,7 +420,67 @@ with col3:
         if st.button("Use likely repair number in offer", type="primary"):
             st.session_state["repairs"] = int(repair_analysis.get("recommended_repair_number", 0) or 0)
             st.success("Repair number copied into Estimated repairs. Scroll down and confirm it before analyzing the deal.")
+    st.markdown("### Manual Comp Entry Fallback")
+    st.caption("Use this when RentCast cannot find value/comps. Enter 1 to 5 sold or listed comps.")
+
+    comp_rows = []
+    for idx in range(1, 6):
+        with st.expander(f"Comparable Property {idx}", expanded=(idx == 1)):
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.text_input("Address", key=f"manual_comp_{idx}_address")
+            with c2:
+                st.number_input(
+                    "Sold/list price",
+                    min_value=0,
+                    step=1000,
+                    key=f"manual_comp_{idx}_price",
+                )
+
+            c3, c4, c5 = st.columns(3)
+            with c3:
+                st.number_input("Beds", min_value=0.0, step=0.5, key=f"manual_comp_{idx}_beds")
+            with c4:
+                st.number_input("Baths", min_value=0.0, step=0.5, key=f"manual_comp_{idx}_baths")
+            with c5:
+                st.number_input("Sqft", min_value=0, step=50, key=f"manual_comp_{idx}_sqft")
+
+            st.text_input("Condition", key=f"manual_comp_{idx}_condition")
+            st.text_area("Notes", height=80, key=f"manual_comp_{idx}_notes")
+
+        price = safe_float(st.session_state.get(f"manual_comp_{idx}_price", 0))
+        if price > 0:
+            comp_rows.append(
+                {
+                    "address": st.session_state.get(f"manual_comp_{idx}_address", ""),
+                    "sold/list price": price,
+                    "beds": st.session_state.get(f"manual_comp_{idx}_beds", 0),
+                    "baths": st.session_state.get(f"manual_comp_{idx}_baths", 0),
+                    "sqft": st.session_state.get(f"manual_comp_{idx}_sqft", 0),
+                    "condition": st.session_state.get(f"manual_comp_{idx}_condition", ""),
+                    "notes": st.session_state.get(f"manual_comp_{idx}_notes", ""),
+                }
+            )
+
+    comps_average = manual_comps_average()
+    st.metric("Average comp value", money(comps_average))
+    if comp_rows:
+        st.dataframe(pd.DataFrame(comp_rows), use_container_width=True)
+
+    st.number_input(
+        "Manual ARV override",
+        min_value=0,
+        step=1000,
+        key="manual_arv_override",
+        help="Fallback only. RentCast ARV, sheet ARV, then manual comps are used first.",
+    )
+
+    resolved_arv, value_source = resolve_value_source()
+    st.session_state["arv"] = int(resolved_arv) if resolved_arv > 0 else 0
+    st.session_state["value_source"] = value_source
+
     st.markdown("### Value / Wholesale Reference")
+    st.caption(f"Value Source: {value_source}")
 
     v1, v2 = st.columns(2)
 
@@ -379,7 +490,7 @@ with col3:
             min_value=0,
             step=1000,
             key="arv",
-            help="Required on every deal. Zillow/RentCast may auto-fill this, but you can override it.",
+            help="Required on every deal. Auto-filled from RentCast, sheet ARV, manual comps, or manual override.",
         )
 
     with v2:
@@ -392,7 +503,7 @@ with col3:
         )
 
     if float(st.session_state.get("arv", 0) or 0) <= 0:
-        st.warning("ARV is missing. Add ARV before making a final offer.")
+        st.warning("ARV is missing. Add ARV or manual comps before making a final offer.")
 
 st.text_area("Seller/agent notes, condition, occupancy, motivation", height=120, key="notes")
 st.caption(f"Current source: {st.session_state.get('source_mode')} / {st.session_state.get('lead_source')}")
@@ -403,6 +514,12 @@ if analyze:
     asking_price_value = float(st.session_state.get("asking_price", 0) or 0)
     contract_price_value = float(st.session_state.get("contract_price", 0) or 0)
     analysis_price = contract_price_value if contract_price_value > 0 else asking_price_value
+    resolved_arv, value_source = resolve_value_source()
+    st.session_state["value_source"] = value_source
+
+    if resolved_arv <= 0:
+        st.warning("ARV is missing. Add ARV or manual comps before making a final offer.")
+
     deal = DealInput(
         address=st.session_state["address"],
         market=st.session_state["market"],
@@ -419,7 +536,7 @@ if analyze:
         livable=st.session_state["livable"],
         days_on_market=int(st.session_state["days_on_market"]),
         notes=st.session_state["notes"],
-        arv=float(st.session_state.get("arv", 0) or 0),
+        arv=float(resolved_arv or 0),
         repairs=float(st.session_state.get("repairs", 0) or 0),
     )
 
@@ -457,7 +574,8 @@ if analyze:
         st.subheader("Value / Wholesale Reference")
         wholesale = result["wholesale"]
         st.write({
-        "ARV / estimated value": money(st.session_state.get("arv", 0)),
+        "ARV / estimated value": money(resolved_arv),
+        "Value Source": value_source,
         "Repairs": money(st.session_state.get("repairs", 0)),
         "Buyer target": money(wholesale["buyer_target"]),
         "Wholesale max offer": money(wholesale["max_offer"]),
@@ -490,7 +608,9 @@ if analyze:
             "best_exit": result["best_exit"],
             "asking_price": st.session_state["asking_price"],
             "rent": st.session_state["rent"],
-            "arv": st.session_state.get("arv", 0),
+            "arv": resolved_arv,
+            "value_source": value_source,
+            "manual_comps_average": manual_comps_average(),
             "repairs": st.session_state.get("repairs", 0),
             "first_offer": best.get("offer_to_send", best.get("target_offer_low", 0)),
             "internal_max_offer": best["max_offer"],
