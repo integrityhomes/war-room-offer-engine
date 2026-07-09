@@ -321,14 +321,6 @@ REPAIR_PRICE_BOOK: dict[str, RepairPrice] = {
         6500,
         15000,
         "Always flag for sewer scope if suspected.",
-             "sewer_line": RepairPrice(
-        "Red Flag",
-        "Sewer line allowance",
-        "each",
-        2500,
-        6500,
-        15000,
-        "Always flag for sewer scope if suspected.",
     ),
 
     "crawlspace_vapor_barrier": RepairPrice(
@@ -386,8 +378,8 @@ REPAIR_PRICE_BOOK: dict[str, RepairPrice] = {
         "Use when fuse box, knob and tube, aluminum wiring, or old electrical panel is mentioned.",
     ),
 }
-    ),
-}
+
+
 
 
 MARKET_MULTIPLIERS = {
