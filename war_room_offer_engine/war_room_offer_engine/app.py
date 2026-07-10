@@ -303,8 +303,23 @@ FIELD_DEFAULTS = {
     "comp_source": "",
     "county_tax_gis_link": "",
     "market_type": "Auto",
-    "buyer_demand_confidence": "Medium",
-    "exit_confidence": "Medium",
+    "buyer_demand_confidence": "Unknown",
+    "wholesale_buyer_list_strength": "No buyer list yet",
+    "slow_flip_buyer_demand": "Unknown",
+    "rental_demand_confidence": "Unknown",
+    "exit_strategy_confidence": "Unknown",
+    "property_marketability": "Normal",
+    "exit_obstacles": [],
+    "buyer_proof": "Unknown",
+    "buyer_demand_score": "Weak",
+    "wholesale_exit_confidence": "Weak",
+    "slow_flip_exit_confidence": "Weak",
+    "overall_exit_confidence": "Weak",
+    "exit_risk_warnings": [],
+    "recommended_exit_strategy": "",
+    "backup_exit_strategy": "",
+    "buyer_outreach_needed": "Yes",
+    "exit_verification_items": [],
     "notes": "",
 }
 
@@ -719,10 +734,12 @@ def advanced_wholesale_buyer_model(
     if safe_float(st.session_state.get("rent", 0)) >= 1200:
         buyer_percent += 0.02
         reasons.append("Strong rental demand adds 2%.")
-    if buyer_demand_confidence == "Strong":
+    buyer_demand_text = str(buyer_demand_confidence or "").lower()
+    exit_confidence_text = str(exit_confidence or "").lower()
+    if "strong" in buyer_demand_text:
         buyer_percent += 0.03
         reasons.append("Strong buyer demand adds 3%.")
-    elif buyer_demand_confidence == "Weak":
+    elif "limited" in buyer_demand_text or "weak" in buyer_demand_text or "unknown" in buyer_demand_text:
         buyer_percent -= 0.03
         reasons.append("Weak buyer demand subtracts 3%.")
     if any(word in all_notes for word in ["functional obsolescence", "low ceiling", "low ceilings", "no driveway", "bad layout"]):
@@ -731,10 +748,10 @@ def advanced_wholesale_buyer_model(
     if market_type == "Unknown":
         buyer_percent -= 0.05
         reasons.append("Unknown market subtracts 5%.")
-    if exit_confidence == "Weak":
+    if "weak" in exit_confidence_text or "unknown" in exit_confidence_text:
         buyer_percent -= 0.03
         reasons.append("Weak data/exit confidence subtracts 3%.")
-    elif exit_confidence == "Strong":
+    elif "strong" in exit_confidence_text:
         buyer_percent += 0.02
         reasons.append("Strong exit confidence adds 2%.")
     if st.session_state.get("repair_level") == "Investor Basic" and repairs > 0 and repairs < max(20000, arv * 0.12 if arv else 20000):
@@ -778,6 +795,216 @@ def market_wholesale_percent_used(
 ) -> tuple[float, list[str]]:
     model = advanced_wholesale_buyer_model(market, arv, repairs, notes, repair_notes)
     return model["buyer_percent"], model["reasons"]
+
+
+EXIT_OBSTACLE_OPTIONS = [
+    "Low ceilings",
+    "Low doorways",
+    "No driveway / street parking only",
+    "Termite / structural concern",
+    "Rural / thin buyer pool",
+    "Weak rent comps",
+    "Weird layout",
+    "High repairs",
+    "Low ARV",
+    "Tenant occupied",
+    "Title/ownership issue",
+    "Flood/moisture concern",
+    "Unknown market",
+    "Other",
+]
+
+
+def build_exit_strategy_confidence(
+    result: dict,
+    deal: DealInput,
+    missing_info: list[str] | None = None,
+    risk_flags: list[str] | None = None,
+) -> dict:
+    missing_info = missing_info or []
+    risk_flags = risk_flags or []
+    exit_mode = deal.exit_mode
+    best_exit = result.get("best_exit", "Needs Human Review")
+    wholesale_percent = safe_float(result.get("wholesale", {}).get("buyer_percent_arv", 0))
+    functional_risks = result.get("slow_flip", {}).get("functional_risks", [])
+
+    buyer_demand = st.session_state.get("buyer_demand_confidence", "Unknown")
+    buyer_list = st.session_state.get("wholesale_buyer_list_strength", "No buyer list yet")
+    slow_flip_demand = st.session_state.get("slow_flip_buyer_demand", "Unknown")
+    rental_demand = st.session_state.get("rental_demand_confidence", "Unknown")
+    exit_confidence_input = st.session_state.get("exit_strategy_confidence", "Unknown")
+    marketability = st.session_state.get("property_marketability", "Normal")
+    obstacles = list(st.session_state.get("exit_obstacles", []) or [])
+    buyer_proof = st.session_state.get("buyer_proof", "Unknown")
+    market_type = st.session_state.get("market_type", "Auto")
+
+    warnings: list[str] = []
+    verification_items: list[str] = []
+    outreach: list[str] = []
+
+    buyer_demand_score = "Medium"
+    if buyer_demand == "Strong buyer demand" and buyer_proof in [
+        "Buyer already interested",
+        "Buyer list confirms demand",
+        "Similar deals sold recently",
+    ]:
+        buyer_demand_score = "Strong"
+    if buyer_demand in ["Limited buyer demand", "Unknown"] or buyer_proof in ["No buyer proof yet", "Unknown"]:
+        buyer_demand_score = "Weak"
+        warnings.append("Buyer demand is limited or unverified. Do not treat this as a clean buy.")
+        verification_items.append("buyer demand")
+
+    if marketability == "Very limited buyer pool":
+        buyer_demand_score = "Weak"
+        warnings.append("Property marketability is very limited. Require Human Review or a steal-price offer.")
+        verification_items.append("buyer pool")
+    elif marketability == "Limited buyer pool":
+        warnings.append("Property has a limited buyer pool. Confirm demand before offer.")
+        verification_items.append("marketability")
+
+    if len(obstacles) >= 3:
+        buyer_demand_score = "Weak"
+        warnings.append("Three or more exit obstacles selected. Require Human Review.")
+        verification_items.append("exit obstacles")
+
+    if buyer_proof == "No buyer proof yet" and market_type in ["Unknown", "Rural / thin buyer market"]:
+        warnings.append("No buyer proof in a new/unproven market. Require Human Review.")
+        verification_items.append("buyer proof")
+
+    wholesale_applicable = exit_mode in ["Wholesale Only", "Auto"]
+    if not wholesale_applicable:
+        wholesale_exit_confidence = "Not applicable"
+    elif buyer_list in ["Weak buyer list", "No buyer list yet", "Not applicable"] or buyer_demand_score == "Weak":
+        wholesale_exit_confidence = "Weak"
+        warnings.append("Wholesale Exit Risk: buyer list strength is weak, missing, or not confirmed.")
+        verification_items.append("wholesale buyers")
+    elif buyer_list == "Some buyers":
+        wholesale_exit_confidence = "Medium"
+    else:
+        wholesale_exit_confidence = "Strong"
+
+    if wholesale_applicable and wholesale_percent < 0.55:
+        wholesale_exit_confidence = "Weak"
+        warnings.append("Wholesale Exit Risk: buyer percent of ARV is below 55%. Require Human Review.")
+        verification_items.append("wholesale buyer percent")
+
+    slow_flip_applicable = exit_mode in ["Slow Flip Only", "Auto"]
+    weak_rental = rental_demand in ["Weak rent comps", "Conflicting data", "Unknown"]
+    if not slow_flip_applicable:
+        slow_flip_exit_confidence = "Not applicable"
+    elif slow_flip_demand in ["Weak", "Unknown", "Not applicable"] or weak_rental:
+        slow_flip_exit_confidence = "Weak"
+        warnings.append("Slow Flip Exit Risk: owner-finance buyer demand or rent support is weak/unverified.")
+        verification_items.append("slow flip buyer demand")
+        if weak_rental:
+            verification_items.append("rent comps")
+    elif slow_flip_demand == "Normal" or rental_demand == "Some rent comps":
+        slow_flip_exit_confidence = "Medium"
+    else:
+        slow_flip_exit_confidence = "Strong"
+
+    if weak_rental and slow_flip_applicable:
+        warnings.append("Weak or conflicting rent comps should prevent a Grade A slow-flip decision.")
+
+    if functional_risks and buyer_demand_score == "Weak":
+        warnings.append("Functional risks plus weak buyer demand: Pass Unless Seller Takes Steal Price.")
+        verification_items.append("functional risk buyer appetite")
+
+    if "High repairs" in obstacles or (deal.arv > 0 and deal.repairs > max(50000, deal.arv * 0.30)):
+        verification_items.append("repair level buyer appetite")
+    if "Low ARV" in obstacles or (deal.arv > 0 and deal.arv < 75000):
+        verification_items.append("low ARV buyer appetite")
+    if "No driveway / street parking only" in obstacles:
+        verification_items.append("parking/access concerns")
+
+    if exit_confidence_input in ["Weak", "Unknown"]:
+        warnings.append("Exit strategy confidence is weak or unknown.")
+        verification_items.append("exit strategy")
+
+    applicable_confidences = [
+        confidence
+        for confidence in [wholesale_exit_confidence, slow_flip_exit_confidence]
+        if confidence != "Not applicable"
+    ]
+    if not applicable_confidences:
+        overall_exit_confidence = "Weak"
+    elif any(confidence == "Weak" for confidence in applicable_confidences) or buyer_demand_score == "Weak":
+        overall_exit_confidence = "Weak"
+    elif all(confidence == "Strong" for confidence in applicable_confidences) and buyer_demand_score == "Strong":
+        overall_exit_confidence = "Strong"
+    else:
+        overall_exit_confidence = "Medium"
+
+    if best_exit == "Wholesale":
+        selected_exit_confidence = wholesale_exit_confidence
+        backup_exit = "Slow Flip" if slow_flip_exit_confidence in ["Strong", "Medium"] else "Pass"
+    elif best_exit == "Slow Flip":
+        selected_exit_confidence = slow_flip_exit_confidence
+        backup_exit = "Wholesale" if wholesale_exit_confidence in ["Strong", "Medium"] else "Pass"
+    else:
+        selected_exit_confidence = overall_exit_confidence
+        backup_exit = "Pass"
+
+    recommended_exit = best_exit if best_exit in ["Wholesale", "Slow Flip"] else "Human Review"
+    if selected_exit_confidence == "Weak" and best_exit in ["Wholesale", "Slow Flip"]:
+        recommended_exit = f"{best_exit} after verification"
+
+    buyer_outreach_needed = "Yes" if overall_exit_confidence != "Strong" or wholesale_exit_confidence == "Weak" or buyer_proof in ["No buyer proof yet", "Unknown"] else "No"
+    if buyer_outreach_needed == "Yes":
+        outreach.extend(
+            [
+                "Send to top buyers before final offer",
+                "Confirm buyer appetite for this city",
+                "Confirm buyer appetite for repair level",
+            ]
+        )
+    if deal.beds <= 2 or (deal.arv > 0 and deal.arv < 75000):
+        outreach.append("Confirm buyer appetite for 2-bed / low ARV property")
+    if slow_flip_applicable:
+        outreach.append("Confirm slow flip buyer demand")
+    if weak_rental:
+        outreach.append("Verify rent comps")
+    if "No driveway / street parking only" in obstacles:
+        outreach.append("Verify parking/access concerns")
+
+    if "Missing ARV" in missing_info:
+        verification_items.append("ARV")
+    if "Missing repairs" in missing_info:
+        verification_items.append("repairs")
+    if "Missing rent" in missing_info:
+        verification_items.append("rents")
+    if risk_flags:
+        verification_items.append("risk flags")
+
+    return {
+        "buyer_demand_score": buyer_demand_score,
+        "wholesale_exit_confidence": wholesale_exit_confidence,
+        "slow_flip_exit_confidence": slow_flip_exit_confidence,
+        "overall_exit_confidence": overall_exit_confidence,
+        "exit_risk_warnings": list(dict.fromkeys(safe_condition_text(warning) for warning in warnings)),
+        "recommended_exit_strategy": recommended_exit,
+        "backup_exit_strategy": backup_exit,
+        "buyer_outreach_needed": buyer_outreach_needed,
+        "exit_verification_items": list(dict.fromkeys(verification_items)),
+        "buyer_outreach_checklist": list(dict.fromkeys(outreach)),
+        "selected_exit_confidence": selected_exit_confidence,
+        "exit_obstacles": obstacles,
+    }
+
+
+def store_exit_confidence_summary(summary: dict) -> None:
+    for key in [
+        "buyer_demand_score",
+        "wholesale_exit_confidence",
+        "slow_flip_exit_confidence",
+        "overall_exit_confidence",
+        "exit_risk_warnings",
+        "recommended_exit_strategy",
+        "backup_exit_strategy",
+        "buyer_outreach_needed",
+        "exit_verification_items",
+    ]:
+        st.session_state[key] = summary.get(key, [] if key in ["exit_risk_warnings", "exit_verification_items"] else "")
 
 
 def resolve_slow_flip_max_buy_price(market: str) -> tuple[float, str]:
@@ -993,6 +1220,21 @@ def choose_final_decision(
         return "Human Review"
     if critical_missing.intersection(missing_info):
         return "Human Review"
+    if any("Functional risks plus weak buyer demand" in str(flag) for flag in risk_flags):
+        return "Pass"
+    if any(
+        phrase in str(flag)
+        for flag in risk_flags
+        for phrase in [
+            "Do not treat this as a clean buy",
+            "Three or more exit obstacles",
+            "very limited",
+            "Require Human Review",
+            "Wholesale Exit Risk",
+            "Slow Flip Exit Risk",
+        ]
+    ):
+        return "Human Review"
     if any(flag in risk_flags for flag in ["Verified mold mentioned in notes", "Moisture staining/discoloration needs verification", "Property not livable"]):
         return "Human Review"
     if asking > 0 and max_offer > 0 and asking > max_offer:
@@ -1031,6 +1273,7 @@ def build_decision_reason(
         f"Grade {result['grade']} with {result['best_exit']} as the best exit. "
         f"Value source is {value_source}; ARV is {money(deal.arv)}, rent is {money(deal.rent)}, "
         f"repairs are {money(deal.repairs)}, and buy price is {money(deal.asking_price)}. "
+        f"Buyer demand score is {st.session_state.get('buyer_demand_score', 'Weak')} and overall exit confidence is {st.session_state.get('overall_exit_confidence', 'Weak')}. "
         f"The current first offer is {money(best.get('offer_to_send', best.get('target_offer_low', 0)))} "
         f"against an internal max of {money(best.get('max_offer', 0))}. Key concern: {risk_summary}."
     )
@@ -1057,8 +1300,12 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         "Tax Assessment Reference",
         "Missing",
     ]
+    exit_summary = build_exit_strategy_confidence(result, deal, missing_info, risk_flags)
+    weak_exit = exit_summary.get("overall_exit_confidence") == "Weak"
+    limited_marketability = st.session_state.get("property_marketability") == "Very limited buyer pool"
+    too_many_obstacles = len(st.session_state.get("exit_obstacles", []) or []) >= 3
 
-    if critical_missing or weak_arv_source or best_exit == "Needs Human Review" or functional_risks or wholesale_percent < 0.55:
+    if critical_missing or weak_arv_source or weak_exit or best_exit == "Needs Human Review" or functional_risks or wholesale_percent < 0.55:
         plain_answer = "Needs Human Review"
     elif best_exit == "Wholesale":
         plain_answer = "Wholesale Only"
@@ -1079,6 +1326,12 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         plain_answer = "Needs Human Review"
     if high_repairs and weak_arv_source:
         plain_answer = "Pass Unless Seller Takes Steal Price"
+    if functional_risks and exit_summary.get("buyer_demand_score") == "Weak":
+        plain_answer = "Pass Unless Seller Takes Steal Price"
+    if limited_marketability and plain_answer in ["Buy", "Wholesale Only", "Slow Flip Only", "Renegotiate Hard"]:
+        plain_answer = "Needs Human Review"
+    if too_many_obstacles and plain_answer in ["Buy", "Wholesale Only", "Slow Flip Only", "Renegotiate Hard"]:
+        plain_answer = "Needs Human Review"
 
     why = []
     if asking > hard_max > 0:
@@ -1091,6 +1344,10 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         why.append("ARV confidence is not strong enough for a clean Buy decision.")
     if best_exit == "Wholesale" and weak_arv_source:
         why.append("Wholesale spread depends on weak ARV support, so verify comps before sending a firm number.")
+    if weak_exit:
+        why.append("Do not treat this as a clean buy. Exit confidence is weak or unverified.")
+    if exit_summary.get("exit_risk_warnings"):
+        why.extend(exit_summary.get("exit_risk_warnings", [])[:3])
     if high_repairs:
         why.append("Repairs are high compared to the ARV, so the deal needs a larger discount.")
     if functional_risks:
@@ -1106,6 +1363,8 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         next_move = "Verify rent first"
     elif any("termite" in str(flag).lower() or "structural" in str(flag).lower() or "moisture" in str(flag).lower() for flag in risk_flags):
         next_move = "Get contractor/termite inspection"
+    elif exit_summary.get("buyer_outreach_needed") == "Yes":
+        next_move = "Confirm buyer demand first"
     elif plain_answer in ["Do Not Buy", "Pass Unless Seller Takes Steal Price"]:
         next_move = "Pass"
     elif plain_answer in ["Renegotiate Hard", "Needs Human Review"]:
@@ -1125,7 +1384,7 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
     if not risk_flags:
         confidence_score += 1
     confidence = "Strong" if confidence_score >= 4 else "Medium" if confidence_score >= 2 else "Weak"
-    if critical_missing or functional_risks:
+    if critical_missing or functional_risks or weak_exit:
         confidence = "Weak"
 
     one_sentence = (
@@ -1145,6 +1404,12 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         },
         "confidence": confidence,
         "one_sentence_summary": safe_condition_text(one_sentence),
+        "buyer_demand_score": exit_summary.get("buyer_demand_score", "Weak"),
+        "wholesale_exit_confidence": exit_summary.get("wholesale_exit_confidence", "Weak"),
+        "slow_flip_exit_confidence": exit_summary.get("slow_flip_exit_confidence", "Weak"),
+        "overall_exit_confidence": exit_summary.get("overall_exit_confidence", "Weak"),
+        "exit_risk_warnings": exit_summary.get("exit_risk_warnings", []),
+        "recommended_exit_strategy": exit_summary.get("recommended_exit_strategy", ""),
     }
 
 
@@ -1172,6 +1437,16 @@ def render_simple_deal_answer(simple_answer: dict) -> None:
         n1, n2 = st.columns(2)
         n1.info(f"Best Next Move: {simple_answer['best_next_move']}")
         n2.info(f"Confidence: {simple_answer['confidence']}")
+        e1, e2, e3, e4 = st.columns(4)
+        e1.metric("Buyer Demand Score", simple_answer.get("buyer_demand_score", "Weak"))
+        e2.metric("Wholesale Exit Confidence", simple_answer.get("wholesale_exit_confidence", "Weak"))
+        e3.metric("Slow Flip Exit Confidence", simple_answer.get("slow_flip_exit_confidence", "Weak"))
+        e4.metric("Overall Exit Confidence", simple_answer.get("overall_exit_confidence", "Weak"))
+        if simple_answer.get("exit_risk_warnings"):
+            st.write("Exit Risk Warnings:")
+            for warning in simple_answer.get("exit_risk_warnings", []):
+                st.warning(safe_condition_text(warning))
+        st.info(f"Recommended Exit Strategy: {simple_answer.get('recommended_exit_strategy', '')}")
         st.write(simple_answer["one_sentence_summary"])
 
 
@@ -1305,6 +1580,30 @@ def render_repair_estimate_breakdown(breakdown: dict) -> None:
     render_repair_number_explanation(breakdown.get("repair_calibration", {}))
 
 
+def render_exit_strategy_recommendation(exit_summary: dict, result: dict) -> None:
+    st.subheader("Exit Strategy Recommendation")
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Best exit", result.get("best_exit", "Needs Human Review"))
+        c2.metric("Backup exit", exit_summary.get("backup_exit_strategy", "Pass"))
+        c3.metric("Exit confidence", exit_summary.get("overall_exit_confidence", "Weak"))
+        c4.metric("Buyer outreach needed?", exit_summary.get("buyer_outreach_needed", "Yes"))
+
+        st.write("What must be verified before offer:")
+        verification_items = exit_summary.get("exit_verification_items", [])
+        if verification_items:
+            for item in verification_items:
+                st.warning(str(item).title())
+        else:
+            st.success("No extra exit verification flagged.")
+
+        checklist = exit_summary.get("buyer_outreach_checklist", [])
+        if checklist:
+            st.write("Buyer outreach checklist:")
+            for item in checklist:
+                st.write(f"- {item}")
+
+
 def render_final_decision_box(
     result: dict,
     deal: DealInput,
@@ -1316,12 +1615,16 @@ def render_final_decision_box(
     best = result["best"]
     missing_info = build_missing_info(deal, uploaded_files, repair_notes)
     risk_flags = list(dict.fromkeys(result.get("risks", []) + build_extra_risk_flags(deal, result, value_source, assumptions)))
+    exit_summary = build_exit_strategy_confidence(result, deal, missing_info, risk_flags)
+    store_exit_confidence_summary(exit_summary)
+    risk_flags = list(dict.fromkeys(risk_flags + exit_summary.get("exit_risk_warnings", [])))
     final_decision = choose_final_decision(result, deal, missing_info, risk_flags)
     team_action = choose_team_action(final_decision, missing_info)
     decision_reason = build_decision_reason(result, deal, value_source, risk_flags)
     simple_answer = build_simple_deal_answer(result, deal, missing_info, risk_flags)
 
     render_simple_deal_answer(simple_answer)
+    render_exit_strategy_recommendation(exit_summary, result)
     st.subheader("Final Decision")
     with st.container(border=True):
         if final_decision == "Send Offer":
@@ -1342,6 +1645,11 @@ def render_final_decision_box(
         a1.metric("ARV Source Used", st.session_state.get("arv_source_used", value_source))
         a2.metric("ARV Confidence", st.session_state.get("arv_confidence", "Not enough data"))
         a3.metric("Recommended ARV", money(deal.arv))
+
+        x1, x2, x3 = st.columns(3)
+        x1.metric("Buyer Demand Score", exit_summary.get("buyer_demand_score", "Weak"))
+        x2.metric("Recommended Exit Strategy", exit_summary.get("recommended_exit_strategy", "Human Review"))
+        x3.metric("Overall Exit Confidence", exit_summary.get("overall_exit_confidence", "Weak"))
 
         slow = result.get("slow_flip", {})
         s1, s2, s3 = st.columns(3)
@@ -1388,6 +1696,7 @@ def render_final_decision_box(
         "risk_flags": risk_flags,
         "team_action": team_action,
         "simple_answer": simple_answer,
+        "exit_summary": exit_summary,
     }
 
 
@@ -1403,6 +1712,7 @@ def build_deal_log_row(
     market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
     result_assumptions = result.get("assumptions", {})
     simple_answer = final_summary.get("simple_answer", {})
+    exit_summary = final_summary.get("exit_summary", {})
     offer_range = simple_answer.get("safe_offer_range", {})
     repair_breakdown = build_repair_breakdown()
     wholesale = result.get("wholesale", {})
@@ -1470,6 +1780,23 @@ def build_deal_log_row(
         "repair_risk_cushion": repair_breakdown.get("repair_calibration", {}).get("repair_risk_cushion", 0),
         "final_repair_estimate": repair_breakdown.get("repair_calibration", {}).get("final_repair_estimate", deal.repairs),
         "repair_number_explanation": repair_breakdown.get("repair_calibration", {}).get("repair_number_explanation", ""),
+        "buyer_demand_confidence": st.session_state.get("buyer_demand_confidence", ""),
+        "wholesale_buyer_list_strength": st.session_state.get("wholesale_buyer_list_strength", ""),
+        "slow_flip_buyer_demand": st.session_state.get("slow_flip_buyer_demand", ""),
+        "rental_demand_confidence": st.session_state.get("rental_demand_confidence", ""),
+        "exit_strategy_confidence": st.session_state.get("exit_strategy_confidence", ""),
+        "property_marketability": st.session_state.get("property_marketability", ""),
+        "exit_obstacles": "; ".join(st.session_state.get("exit_obstacles", []) or []),
+        "buyer_proof": st.session_state.get("buyer_proof", ""),
+        "buyer_demand_score": exit_summary.get("buyer_demand_score", st.session_state.get("buyer_demand_score", "")),
+        "wholesale_exit_confidence": exit_summary.get("wholesale_exit_confidence", st.session_state.get("wholesale_exit_confidence", "")),
+        "slow_flip_exit_confidence": exit_summary.get("slow_flip_exit_confidence", st.session_state.get("slow_flip_exit_confidence", "")),
+        "overall_exit_confidence": exit_summary.get("overall_exit_confidence", st.session_state.get("overall_exit_confidence", "")),
+        "exit_risk_warnings": "; ".join(exit_summary.get("exit_risk_warnings", st.session_state.get("exit_risk_warnings", []))),
+        "recommended_exit_strategy": exit_summary.get("recommended_exit_strategy", st.session_state.get("recommended_exit_strategy", "")),
+        "backup_exit_strategy": exit_summary.get("backup_exit_strategy", st.session_state.get("backup_exit_strategy", "")),
+        "buyer_outreach_needed": exit_summary.get("buyer_outreach_needed", st.session_state.get("buyer_outreach_needed", "")),
+        "exit_verification_items": "; ".join(exit_summary.get("exit_verification_items", st.session_state.get("exit_verification_items", []))),
         "final_decision": final_summary["final_decision"],
         "team_action": final_summary["team_action"],
         "best_exit": result["best_exit"],
@@ -1553,8 +1880,6 @@ with st.sidebar:
         disabled=not manual_wholesale_override,
     )
     st.selectbox("Market type", ["Auto", "Very liquid investor market", "Normal investor market", "Rural / thin buyer market", "Unknown"], key="market_type")
-    st.selectbox("Buyer demand confidence", ["Strong", "Medium", "Weak"], key="buyer_demand_confidence")
-    st.selectbox("Exit confidence", ["Strong", "Medium", "Weak"], key="exit_confidence")
     slow_flip_max_offer_cap = st.number_input("Normal slow flip max offer cap", min_value=0, value=32000, step=500, help="Bradley rule: 98% of slow-flip offers stay at or below this number. Use human review for exceptions.")
     slow_flip_first_offer_gap = st.number_input("Slow flip first offer below max", min_value=0, value=4000, step=500, help="Negotiation rule: do not start at max. Example: $32k max starts at $28k.")
     st.session_state["min_assignment_fee_snapshot"] = min_assignment_fee
@@ -1900,6 +2225,50 @@ exit_mode = st.radio(
     horizontal=True,
     help="Use Slow Flip Only for your normal owner-finance/slow-flip buy box. ARV/repairs are informational unless you switch to Wholesale/Auto.",
 )
+
+st.subheader("Buyer Demand / Exit Confidence")
+with st.container(border=True):
+    bd1, bd2, bd3, bd4 = st.columns(4)
+    with bd1:
+        st.selectbox(
+            "Buyer demand confidence",
+            ["Strong buyer demand", "Normal buyer demand", "Limited buyer demand", "Unknown"],
+            key="buyer_demand_confidence",
+        )
+        st.selectbox(
+            "Wholesale buyer list strength",
+            ["Strong active buyers", "Some buyers", "Weak buyer list", "No buyer list yet", "Not applicable"],
+            key="wholesale_buyer_list_strength",
+        )
+    with bd2:
+        st.selectbox(
+            "Slow flip / owner-finance buyer demand",
+            ["Strong", "Normal", "Weak", "Unknown", "Not applicable"],
+            key="slow_flip_buyer_demand",
+        )
+        st.selectbox(
+            "Rental demand confidence",
+            ["Strong verified rents", "Some rent comps", "Weak rent comps", "Conflicting data", "Unknown"],
+            key="rental_demand_confidence",
+        )
+    with bd3:
+        st.selectbox(
+            "Exit strategy confidence",
+            ["Strong", "Moderate", "Weak", "Unknown"],
+            key="exit_strategy_confidence",
+        )
+        st.selectbox(
+            "Property marketability",
+            ["Easy to sell", "Normal", "Limited buyer pool", "Very limited buyer pool"],
+            key="property_marketability",
+        )
+    with bd4:
+        st.selectbox(
+            "Buyer proof",
+            ["Buyer already interested", "Buyer list confirms demand", "Similar deals sold recently", "No buyer proof yet", "Unknown"],
+            key="buyer_proof",
+        )
+    st.multiselect("Exit obstacles", EXIT_OBSTACLE_OPTIONS, key="exit_obstacles")
 
 col1, col2, col3 = st.columns([1, 1, 1.45])
 with col1:
@@ -2276,7 +2645,7 @@ with col3:
         market_type=st.session_state.get("market_type", "Auto"),
         occupancy=st.session_state.get("occupancy", "Unknown"),
         livable=st.session_state.get("livable", "Unknown"),
-        exit_confidence=st.session_state.get("exit_confidence", "Medium"),
+        exit_confidence=st.session_state.get("exit_strategy_confidence", "Unknown"),
     )
     market_buyer_percent = wholesale_model["buyer_percent"]
     market_adjustments = wholesale_model["reasons"]
@@ -2361,7 +2730,7 @@ if analyze:
         market_type=st.session_state.get("market_type", "Auto"),
         occupancy=st.session_state.get("occupancy", "Unknown"),
         livable=st.session_state.get("livable", "Unknown"),
-        exit_confidence=st.session_state.get("exit_confidence", "Medium"),
+        exit_confidence=st.session_state.get("exit_strategy_confidence", "Unknown"),
     )
     final_wholesale_buyer_percent = wholesale_model["buyer_percent"]
     if manual_wholesale_override:
