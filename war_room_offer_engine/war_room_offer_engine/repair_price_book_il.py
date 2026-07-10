@@ -15,6 +15,15 @@ class RepairPrice:
     notes: str = ""
 
 
+@dataclass
+class MarketProfile:
+    group: str
+    buyer_profile: str
+    repair_multiplier: float
+    wholesale_buyer_percent: float
+    notes: str = ""
+
+
 # NON-CHICAGO ILLINOIS INVESTOR PRICING ONLY.
 # These are working numbers for quick acquisition analysis, not final contractor bids.
 # We will tune these over time from Shawn/Sabrina's real contractor invoices.
@@ -377,29 +386,163 @@ REPAIR_PRICE_BOOK: dict[str, RepairPrice] = {
         7500,
         "Use when fuse box, knob and tube, aluminum wiring, or old electrical panel is mentioned.",
     ),
+    "active_roof_leak_water_intrusion": RepairPrice(
+        "Virginia / Red Flag",
+        "Active roof leak / water intrusion allowance",
+        "each",
+        1500,
+        4500,
+        12000,
+        "Red-flag allowance only. Active leaks require contractor verification.",
+    ),
+    "mold_remediation_allowance": RepairPrice(
+        "Virginia / Red Flag",
+        "Mold remediation allowance",
+        "each",
+        2500,
+        7500,
+        20000,
+        "Investor-grade allowance. Visible mold requires contractor verification.",
+    ),
+    "crawlspace_wood_rot_repair": RepairPrice(
+        "Virginia / Crawlspace",
+        "Crawlspace wood rot repair",
+        "each",
+        2500,
+        7500,
+        18000,
+        "Use for crawlspace moisture, fungus, or localized wood rot. Contractor verification required.",
+    ),
+    "floor_joist_sill_plate_repair": RepairPrice(
+        "Virginia / Structural",
+        "Floor joist / sill plate repair allowance",
+        "each",
+        3500,
+        9500,
+        25000,
+        "Structural red flag. Use only as a working estimate until contractor verification.",
+    ),
+    "polybutylene_plumbing_allowance": RepairPrice(
+        "Virginia / Plumbing",
+        "Polybutylene plumbing allowance",
+        "each",
+        3500,
+        8500,
+        18000,
+        "Use when polybutylene is present or suspected. Contractor verification required.",
+    ),
+    "galvanized_plumbing_allowance": RepairPrice(
+        "Virginia / Plumbing",
+        "Galvanized plumbing allowance",
+        "each",
+        2500,
+        6500,
+        16000,
+        "Use when old galvanized supply lines are present or suspected.",
+    ),
+    "heat_pump_replacement": RepairPrice(
+        "Virginia / HVAC",
+        "Heat pump replacement",
+        "each",
+        5500,
+        8500,
+        14000,
+        "Common Virginia HVAC allowance. Confirm tonnage and ductwork condition.",
+    ),
+    "mobile_manufactured_home_repair": RepairPrice(
+        "Virginia / Specialty",
+        "Mobile/manufactured home repair allowance",
+        "each",
+        3500,
+        10000,
+        25000,
+        "Use for manufactured-home-specific access, skirting, roof, floor, or system issues.",
+    ),
+    "rural_driveway_gravel_access": RepairPrice(
+        "Virginia / Rural",
+        "Rural driveway / gravel / access allowance",
+        "each",
+        1000,
+        3500,
+        10000,
+        "Use for long gravel driveways, access issues, or rural site cleanup.",
+    ),
+    "flood_zone_moisture_risk": RepairPrice(
+        "Virginia / Red Flag",
+        "Flood zone / moisture risk allowance",
+        "each",
+        1500,
+        5000,
+        15000,
+        "Risk allowance only. Verify flood zone, drainage, and moisture history before offer.",
+    ),
 }
 
 
 
 
-MARKET_MULTIPLIERS = {
+MARKET_PROFILES: dict[str, MarketProfile] = {
     # Illinois - non-Chicago investor pricing
-    "Downstate IL": 0.95,
-    "Central IL": 1.00,
-    "Metro East IL": 1.05,
-    "Northern IL Non-Chicago": 1.10,
+    "Downstate IL": MarketProfile("Illinois", "Rural / thin buyer market", 0.95, 0.64),
+    "Central IL": MarketProfile("Illinois", "Normal investor market", 1.00, 0.69),
+    "Metro East IL": MarketProfile("Illinois / St. Louis Metro", "Normal investor market", 1.05, 0.70),
+    "Northern IL Non-Chicago": MarketProfile("Illinois", "Normal investor market", 1.10, 0.70),
 
     # Virginia investor pricing
-    "Southside VA": 1.03,
-    "Southwest VA": 1.00,
-    "Roanoke / Lynchburg VA": 1.05,
-    "Richmond / Petersburg VA": 1.12,
-    "Hampton Roads / Tidewater VA": 1.15,
-    "Shenandoah Valley VA": 1.08,
-    "Charlottesville / Central VA": 1.15,
-    "Fredericksburg / Northern Neck VA": 1.18,
-    "Eastern Shore VA": 1.12,
-    "Northern VA": 1.35,
+    "Southside VA": MarketProfile("Virginia", "Rural / thin buyer market", 1.03, 0.63),
+    "Southwest VA": MarketProfile("Virginia", "Rural / thin buyer market", 1.00, 0.62),
+    "Roanoke / Lynchburg VA": MarketProfile("Virginia", "Normal investor market", 1.05, 0.68),
+    "Richmond / Petersburg VA": MarketProfile("Virginia", "Strong / liquid market", 1.12, 0.73),
+    "Hampton Roads / Tidewater VA": MarketProfile("Virginia", "Strong / liquid market", 1.15, 0.73),
+    "Shenandoah Valley VA": MarketProfile("Virginia", "Normal investor market", 1.08, 0.68),
+    "Charlottesville / Central VA": MarketProfile("Virginia", "Strong / liquid market", 1.15, 0.74),
+    "Fredericksburg / Northern Neck VA": MarketProfile("Virginia", "Strong / liquid market", 1.18, 0.74),
+    "Eastern Shore VA": MarketProfile("Virginia", "Rural / thin buyer market", 1.12, 0.63),
+    "Northern VA": MarketProfile("Virginia", "Strong / liquid market", 1.35, 0.75),
+
+    # Michigan
+    "Detroit Metro MI": MarketProfile("Michigan", "Strong / liquid market", 1.08, 0.73),
+    "Flint / Saginaw MI": MarketProfile("Michigan", "Normal investor market", 0.98, 0.68),
+    "Lansing MI": MarketProfile("Michigan", "Normal investor market", 1.02, 0.69),
+    "Kalamazoo / Battle Creek MI": MarketProfile("Michigan", "Normal investor market", 1.03, 0.69),
+    "Grand Rapids MI": MarketProfile("Michigan", "Strong / liquid market", 1.10, 0.73),
+    "Rural Michigan": MarketProfile("Michigan", "Rural / thin buyer market", 0.95, 0.62),
+
+    # St. Louis Metro
+    "St. Louis City MO": MarketProfile("St. Louis Metro", "Normal investor market", 1.04, 0.69),
+    "North St. Louis County MO": MarketProfile("St. Louis Metro", "Normal investor market", 1.02, 0.68),
+    "South St. Louis County MO": MarketProfile("St. Louis Metro", "Strong / liquid market", 1.06, 0.72),
+    "St. Charles / West County MO": MarketProfile("St. Louis Metro", "Strong / liquid market", 1.12, 0.74),
+
+    # Indiana
+    "Indianapolis IN": MarketProfile("Indiana", "Strong / liquid market", 1.04, 0.72),
+    "Fort Wayne IN": MarketProfile("Indiana", "Normal investor market", 0.98, 0.69),
+    "South Bend IN": MarketProfile("Indiana", "Normal investor market", 1.00, 0.68),
+    "Evansville IN": MarketProfile("Indiana", "Normal investor market", 0.96, 0.68),
+    "Gary / Northwest IN": MarketProfile("Indiana", "Normal investor market", 1.03, 0.68),
+    "Rural Indiana": MarketProfile("Indiana", "Rural / thin buyer market", 0.92, 0.62),
+
+    # Alabama
+    "Birmingham AL": MarketProfile("Alabama", "Strong / liquid market", 0.95, 0.72),
+    "Montgomery AL": MarketProfile("Alabama", "Normal investor market", 0.90, 0.68),
+    "Mobile AL": MarketProfile("Alabama", "Normal investor market", 0.94, 0.69),
+    "Huntsville AL": MarketProfile("Alabama", "Strong / liquid market", 1.02, 0.74),
+    "Tuscaloosa AL": MarketProfile("Alabama", "Normal investor market", 0.93, 0.69),
+    "Rural Alabama": MarketProfile("Alabama", "Rural / thin buyer market", 0.88, 0.62),
+
+    # Florida
+    "Jacksonville FL": MarketProfile("Florida", "Strong / liquid market", 1.12, 0.73),
+    "Tampa Bay FL": MarketProfile("Florida", "Strong / liquid market", 1.22, 0.75),
+    "Orlando FL": MarketProfile("Florida", "Strong / liquid market", 1.18, 0.74),
+    "Ocala / Gainesville FL": MarketProfile("Florida", "Normal investor market", 1.10, 0.69),
+    "Panhandle FL": MarketProfile("Florida", "Normal investor market", 1.08, 0.68),
+    "South Florida FL": MarketProfile("Florida", "Strong / liquid market", 1.32, 0.75),
+    "Rural Florida": MarketProfile("Florida", "Rural / thin buyer market", 1.05, 0.64),
+}
+
+
+MARKET_MULTIPLIERS = {
+    market: profile.repair_multiplier for market, profile in MARKET_PROFILES.items()
 }
 
    
@@ -449,6 +592,18 @@ RED_FLAG_KEYWORDS = [
     "coastal humidity",
     "flood zone",
     "pier foundation",
+    "active roof leak",
+    "roof leak",
+    "water intrusion",
+    "crawlspace wood rot",
+    "floor joist",
+    "sill plate",
+    "heat pump",
+    "mobile home",
+    "manufactured home",
+    "rural driveway",
+    "gravel driveway",
+    "access issue",
 ]
 
 
@@ -460,12 +615,32 @@ def get_market_multiplier(market: str) -> float:
     return MARKET_MULTIPLIERS.get(market, 1.00)
 
 
+def get_market_profile(market: str) -> dict[str, Any]:
+    profile = MARKET_PROFILES.get(market) or MARKET_PROFILES["Central IL"]
+    return {
+        "market": market if market in MARKET_PROFILES else "Central IL",
+        "group": profile.group,
+        "buyer_profile": profile.buyer_profile,
+        "repair_multiplier": profile.repair_multiplier,
+        "wholesale_buyer_percent": profile.wholesale_buyer_percent,
+        "notes": profile.notes,
+    }
+
+
+def get_market_wholesale_buyer_percent(market: str) -> float:
+    return get_market_profile(market).get("wholesale_buyer_percent", 0.70)
+
+
+def get_market_repair_multiplier(market: str) -> float:
+    return get_market_multiplier(market)
+
+
 def get_level_multiplier(level: str) -> float:
     return REPAIR_LEVEL_MULTIPLIERS.get(level, 1.00)
 
 
 def available_markets() -> list[str]:
-    return list(MARKET_MULTIPLIERS.keys())
+    return list(MARKET_PROFILES.keys())
 
 
 def available_repair_levels() -> list[str]:
@@ -627,6 +802,9 @@ def quick_scope_from_notes(notes: str, sqft: float = 1000, baths: float = 1) -> 
     if "hvac" in text or "heating and air" in text:
         add("hvac_full", 1)
 
+    if "heat pump" in text:
+        add("heat_pump_replacement", 1)
+
     if "electrical panel" in text or "breaker panel" in text or "fuse box" in text:
         add("electrical_panel", 1)
 
@@ -638,6 +816,12 @@ def quick_scope_from_notes(notes: str, sqft: float = 1000, baths: float = 1) -> 
 
     if "supply line" in text or "drain line" in text or "pipes need replaced" in text:
         add("plumbing_supply_rework", 1)
+
+    if "polybutylene" in text:
+        add("polybutylene_plumbing_allowance", 1)
+
+    if "galvanized" in text:
+        add("galvanized_plumbing_allowance", 1)
 
     # Interior
     if "paint" in text:
@@ -657,6 +841,9 @@ def quick_scope_from_notes(notes: str, sqft: float = 1000, baths: float = 1) -> 
 
     if "soft floor" in text or "subfloor" in text:
         add("subfloor_repair", 1)
+
+    if "floor joist" in text or "sill plate" in text:
+        add("floor_joist_sill_plate_repair", 1)
 
     # Kitchen / bath
     if "kitchen" in text:
@@ -693,6 +880,42 @@ def quick_scope_from_notes(notes: str, sqft: float = 1000, baths: float = 1) -> 
 
     if "sewer" in text:
         add("sewer_line", 1)
+
+    if "active roof leak" in text or "water intrusion" in text or ("roof" in text and "leak" in text):
+        add("active_roof_leak_water_intrusion", 1)
+
+    if "mold remediation" in text or "black mold" in text:
+        add("mold_remediation_allowance", 1)
+
+    if "crawlspace" in text or "crawl space" in text:
+        add("crawlspace_vapor_barrier", 1)
+
+    if "wood rot" in text or "fungus" in text:
+        add("crawlspace_wood_rot_repair", 1)
+
+    if "termite" in text or "termites" in text:
+        add("termite_treatment", 1)
+
+    if "septic" in text:
+        add("septic_inspection_allowance", 1)
+
+    if "well" in text:
+        add("well_inspection_allowance", 1)
+
+    if "oil heat" in text or "oil tank" in text:
+        add("oil_tank_allowance", 1)
+
+    if "fuse box" in text or "knob and tube" in text or "aluminum wiring" in text:
+        add("fuse_box_panel_upgrade", 1)
+
+    if "mobile home" in text or "manufactured home" in text:
+        add("mobile_manufactured_home_repair", 1)
+
+    if "gravel driveway" in text or "rural driveway" in text or "access issue" in text:
+        add("rural_driveway_gravel_access", 1)
+
+    if "flood zone" in text or "moisture risk" in text:
+        add("flood_zone_moisture_risk", 1)
 
     # If notes are empty or too vague, give a small safety allowance.
     if not scope and text.strip():

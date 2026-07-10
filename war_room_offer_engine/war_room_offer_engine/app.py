@@ -9,6 +9,7 @@ from rules import Assumptions, DealInput, analyze_deal, money
 from ai_writer import build_ai_summary
 from data_sources import fetch_all_sources, merge_results, get_secret
 from repair_analyzer import analyze_repairs, repair_number_for_offer
+from repair_price_book_il import available_markets, get_market_profile, get_market_wholesale_buyer_percent
 from media_notes import generate_boots_on_ground_notes
 st.set_page_config(page_title="War Room Offer Engine", page_icon="🏠", layout="wide")
 
@@ -96,6 +97,53 @@ def resolve_repair_source() -> tuple[float, str]:
     if ai_repair > 0:
         return ai_repair, "AI Repair Estimate"
     return 0.0, "Missing"
+
+
+def percent_label(value: float) -> str:
+    return f"{float(value or 0) * 100:.0f}%"
+
+
+def market_wholesale_percent_used(
+    market: str,
+    arv: float,
+    repairs: float,
+    notes: str,
+    repair_notes: str,
+) -> tuple[float, list[str]]:
+    market_profile = get_market_profile(market)
+    buyer_percent = float(market_profile.get("wholesale_buyer_percent", 0.70) or 0.70)
+    buyer_profile = market_profile.get("buyer_profile", "")
+    all_notes = f"{notes or ''} {repair_notes or ''}".lower()
+    adjustments = []
+
+    major_red_flags = [
+        "foundation",
+        "structural",
+        "mold",
+        "fire damage",
+        "condemned",
+        "roof leak",
+        "active leak",
+        "water intrusion",
+        "sewer",
+        "polybutylene",
+        "galvanized",
+        "termite",
+        "flood zone",
+    ]
+
+    if arv > 0 and repairs > max(40000, arv * 0.25):
+        buyer_percent -= 0.05
+        adjustments.append("Heavy repairs reduce buyer percent by 5%.")
+    elif any(flag in all_notes for flag in major_red_flags):
+        buyer_percent -= 0.05
+        adjustments.append("Major red flags reduce buyer percent by 5%.")
+
+    if arv > 0 and arv < 75000 and buyer_profile != "Strong / liquid market":
+        buyer_percent = min(buyer_percent, 0.65)
+        adjustments.append("Low ARV under $75k caps buyer percent near 65% outside strong markets.")
+
+    return max(buyer_percent, 0.50), adjustments
 
 
 def update_state_from_auto_pull(data: dict) -> None:
@@ -328,6 +376,8 @@ def build_deal_log_row(
     contract_price: float,
 ) -> dict:
     best = result["best"]
+    market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
+    result_assumptions = result.get("assumptions", {})
     return {
         "date_time_analyzed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "address": deal.address,
@@ -342,6 +392,14 @@ def build_deal_log_row(
         "arv": deal.arv,
         "value_source": value_source,
         "manual_comps_average": manual_comps_average(),
+        "market_profile": market_profile.get("buyer_profile", ""),
+        "market_repair_multiplier": market_profile.get("repair_multiplier", 1.0),
+        "market_wholesale_buyer_percent_default": result_assumptions.get(
+            "market_wholesale_buyer_percent",
+            market_profile.get("wholesale_buyer_percent", 0.70),
+        ),
+        "wholesale_buyer_percent_source": result_assumptions.get("wholesale_buyer_percent_source", ""),
+        "final_wholesale_buyer_percent_used": result_assumptions.get("wholesale_buyer_percent_arv", 0.70),
         "repairs": deal.repairs,
         "repair_source": st.session_state.get("repair_source", "Missing"),
         "manual_repair_notes": st.session_state.get("manual_repair_notes", ""),
@@ -381,7 +439,19 @@ with st.sidebar:
     slow_flip_rent_multiple = st.slider("Slow flip resale multiple x rent", 20, 70, 45, 1)
     close_title_buffer = st.number_input("Close/title/safety buffer", min_value=0, value=1500, step=250)
     target_offer_discount = st.slider("Target offer discount from max", 0.50, 1.00, 0.85, 0.01)
-    wholesale_buyer_percent_arv = st.slider("Wholesale buyer % of ARV", 0.40, 0.90, 0.70, 0.01)
+    manual_wholesale_override = st.checkbox(
+        "Use manual wholesale buyer % override",
+        value=False,
+        help="When off, the app uses the selected market profile and deal risk to choose the buyer percent.",
+    )
+    wholesale_buyer_percent_arv = st.slider(
+        "Manual wholesale buyer % of ARV",
+        0.40,
+        0.90,
+        0.70,
+        0.01,
+        disabled=not manual_wholesale_override,
+    )
     slow_flip_max_offer_cap = st.number_input("Normal slow flip max offer cap", min_value=0, value=32000, step=500, help="Bradley rule: 98% of slow-flip offers stay at or below this number. Use human review for exceptions.")
     slow_flip_first_offer_gap = st.number_input("Slow flip first offer below max", min_value=0, value=4000, step=500, help="Negotiation rule: do not start at max. Example: $32k max starts at $28k.")
 
@@ -399,6 +469,8 @@ assumptions = Assumptions(
     close_title_buffer=float(close_title_buffer),
     target_offer_discount=float(target_offer_discount),
     wholesale_buyer_percent_arv=float(wholesale_buyer_percent_arv),
+    wholesale_buyer_percent_source="Manual Override" if manual_wholesale_override else "Market Default",
+    market_wholesale_buyer_percent=float(wholesale_buyer_percent_arv),
     slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
     slow_flip_first_offer_gap=float(slow_flip_first_offer_gap),
 )
@@ -495,7 +567,7 @@ exit_mode = st.radio(
     help="Use Slow Flip Only for your normal owner-finance/slow-flip buy box. ARV/repairs are informational unless you switch to Wholesale/Auto.",
 )
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3 = st.columns([1, 1, 1.45])
 with col1:
     st.text_input("Market / city", key="market", placeholder="Decatur IL")
     st.selectbox("Lead type", ["Agent", "Seller", "Wholesaler", "Other"], key="lead_type")
@@ -516,7 +588,7 @@ with col3:
     st.number_input("Annual taxes", min_value=0, step=100, key="taxes")
     st.subheader("3. Repair / Condition Analyzer")
     st.caption(
-        "Uses investor repair pricing by selected market. Illinois and Virginia active. "
+        "Uses investor repair pricing by selected market across IL, VA, MI, St. Louis, IN, AL, and FL. "
         "Upload photos/videos and add boots-on-ground notes. "
         "This version prices the repair scope from the notes and uploaded media count. "
         "Full AI video frame review and audio transcription will be added next."
@@ -524,22 +596,7 @@ with col3:
 
     repair_market = st.selectbox(
         "Repair pricing market",
-        [
-            "Central IL",
-            "Downstate IL",
-            "Metro East IL",
-            "Northern IL Non-Chicago",
-            "Southside VA",
-            "Southwest VA",
-            "Roanoke / Lynchburg VA",
-            "Richmond / Petersburg VA",
-            "Hampton Roads / Tidewater VA",
-            "Shenandoah Valley VA",
-            "Charlottesville / Central VA",
-            "Fredericksburg / Northern Neck VA",
-            "Eastern Shore VA",
-            "Northern VA",
-        ],
+        available_markets(),
         index=0,
         key="repair_market",
     )
@@ -688,14 +745,7 @@ with col3:
     if resolved_repairs > 0:
         st.session_state["repairs"] = int(resolved_repairs)
     st.session_state["repair_source"] = repair_source
-    repair_source_options = ["AI Repair Estimate", "Manual Repair Estimate", "Missing"]
-    st.selectbox(
-        "Repair source label",
-        repair_source_options,
-        index=repair_source_options.index(repair_source),
-        disabled=True,
-    )
-    st.caption(f"Repair Source: {repair_source}")
+    st.info(f"Repair Source: {repair_source}")
 
     st.markdown("### Manual Comp Entry Fallback")
     st.caption("Use this when RentCast cannot find value/comps. Enter 1 to 5 sold or listed comps.")
@@ -759,6 +809,26 @@ with col3:
     st.markdown("### Value / Wholesale Reference")
     st.caption(f"Value Source: {value_source}")
 
+    market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
+    market_default_buyer_percent = get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
+    market_buyer_percent, market_adjustments = market_wholesale_percent_used(
+        market=st.session_state.get("repair_market", "Central IL"),
+        arv=float(st.session_state.get("arv", 0) or 0),
+        repairs=float(st.session_state.get("repairs", 0) or 0),
+        notes=st.session_state.get("notes", ""),
+        repair_notes=st.session_state.get("repair_notes", "") + " " + st.session_state.get("manual_repair_notes", ""),
+    )
+    final_wholesale_buyer_percent = float(wholesale_buyer_percent_arv) if manual_wholesale_override else market_buyer_percent
+    wholesale_buyer_percent_source = "Manual Override" if manual_wholesale_override else "Market Default"
+
+    p1, p2, p3 = st.columns(3)
+    p1.info(f"Market Profile: {market_profile.get('buyer_profile', 'Normal investor market')}")
+    p2.info(f"Market Repair Multiplier: {float(market_profile.get('repair_multiplier', 1.0)):.2f}x")
+    p3.info(f"Wholesale Buyer % Source: {wholesale_buyer_percent_source}")
+    st.caption(f"Market buyer % of ARV used: {percent_label(final_wholesale_buyer_percent)}")
+    if not manual_wholesale_override and market_adjustments:
+        st.caption(" ".join(market_adjustments))
+
     v1, v2 = st.columns(2)
 
     with v1:
@@ -796,6 +866,31 @@ if analyze:
 
     if resolved_arv <= 0:
         st.warning("ARV is missing. Add ARV or manual comps before making a final offer.")
+
+    market_default_buyer_percent = get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
+    final_wholesale_buyer_percent, market_adjustments = market_wholesale_percent_used(
+        market=st.session_state.get("repair_market", "Central IL"),
+        arv=float(resolved_arv or 0),
+        repairs=float(st.session_state.get("repairs", 0) or 0),
+        notes=st.session_state.get("notes", ""),
+        repair_notes=st.session_state.get("repair_notes", "") + " " + st.session_state.get("manual_repair_notes", ""),
+    )
+    if manual_wholesale_override:
+        final_wholesale_buyer_percent = float(wholesale_buyer_percent_arv)
+    wholesale_buyer_percent_source = "Manual Override" if manual_wholesale_override else "Market Default"
+
+    assumptions = Assumptions(
+        min_assignment_fee=float(min_assignment_fee),
+        exception_assignment_fee=float(exception_assignment_fee),
+        slow_flip_rent_multiple=float(slow_flip_rent_multiple),
+        close_title_buffer=float(close_title_buffer),
+        target_offer_discount=float(target_offer_discount),
+        wholesale_buyer_percent_arv=float(final_wholesale_buyer_percent),
+        wholesale_buyer_percent_source=wholesale_buyer_percent_source,
+        market_wholesale_buyer_percent=float(market_default_buyer_percent),
+        slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
+        slow_flip_first_offer_gap=float(slow_flip_first_offer_gap),
+    )
 
     deal = DealInput(
         address=st.session_state["address"],
@@ -873,6 +968,8 @@ if analyze:
         "ARV / estimated value": money(resolved_arv),
         "Value Source": value_source,
         "Repairs": money(st.session_state.get("repairs", 0)),
+        "Wholesale Buyer % Source": wholesale.get("buyer_percent_source", ""),
+        "Market buyer % of ARV used": percent_label(wholesale.get("buyer_percent_arv", 0)),
         "Buyer target": money(wholesale["buyer_target"]),
         "Wholesale max offer": money(wholesale["max_offer"]),
         "Wholesale estimated fee at buy price": money(wholesale["estimated_fee_at_ask"])

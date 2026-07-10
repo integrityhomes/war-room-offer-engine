@@ -12,6 +12,8 @@ class Assumptions:
     close_title_buffer: float = 1500
     target_offer_discount: float = 0.85
     wholesale_buyer_percent_arv: float = 0.70
+    wholesale_buyer_percent_source: str = "Market Default"
+    market_wholesale_buyer_percent: float = 0.70
     slow_flip_max_offer_cap: float = 32000
     slow_flip_first_offer_gap: float = 4000
 
@@ -110,6 +112,10 @@ def calc_wholesale(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
     return {
         "exit": "Wholesale",
         "buyer_target": buyer_target,
+        "buyer_percent_arv": a.wholesale_buyer_percent_arv,
+        "buyer_percent_source": a.wholesale_buyer_percent_source,
+        "market_buyer_percent_arv": a.market_wholesale_buyer_percent,
+        "needs_human_review": arv <= 0 or repairs <= 0,
         "target_offer_low": target_offer_low,
         "target_offer_high": target_offer_high,
         "first_offer": first_offer,
@@ -177,7 +183,7 @@ def risk_notes(deal: DealInput, best_exit: str) -> list[str]:
     else:
         if deal.arv <= 0:
             risks.append("Missing ARV. Needed only for wholesale analysis.")
-        if deal.repairs <= 0 and deal.exit_mode == "Wholesale Only":
+        if deal.repairs <= 0 and deal.exit_mode in ["Wholesale Only", "Auto"]:
             risks.append("Repairs are set to $0. Needed only for wholesale analysis.")
 
     if deal.days_on_market >= 60:
@@ -230,9 +236,14 @@ def analyze_deal(deal: DealInput, assumptions: Assumptions | None = None) -> Dic
     if deal.exit_mode == "Slow Flip Only":
         best_exit = "Slow Flip" if (deal.livable != "No" and slow_flip["estimated_fee_at_ask"] >= a.exception_assignment_fee) else "Needs Human Review"
     elif deal.exit_mode == "Wholesale Only":
-        best_exit = "Wholesale" if wholesale["estimated_fee_at_ask"] >= a.exception_assignment_fee else "Needs Human Review"
+        if wholesale.get("needs_human_review"):
+            best_exit = "Needs Human Review"
+        else:
+            best_exit = "Wholesale" if wholesale["estimated_fee_at_ask"] >= a.exception_assignment_fee else "Needs Human Review"
     else:
         best_exit = choose_best_exit(wholesale, slow_flip, deal)
+        if best_exit == "Wholesale" and wholesale.get("needs_human_review"):
+            best_exit = "Needs Human Review"
 
     if best_exit == "Wholesale":
         best = wholesale
