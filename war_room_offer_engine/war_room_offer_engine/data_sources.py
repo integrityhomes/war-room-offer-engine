@@ -7,6 +7,17 @@ from typing import Any
 import pandas as pd
 import requests
 
+try:
+    from apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+except ImportError:
+    try:
+        from .apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+    except ImportError:
+        try:
+            from war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+
 
 def get_secret(name: str, default: str = "") -> str:
     try:
@@ -139,6 +150,7 @@ def _api_not_connected(provider: str, secret_name: str) -> dict[str, Any]:
 def provider_connection_status() -> list[dict[str, Any]]:
     return [
         _api_not_connected("RentCast", "RENTCAST_API_KEY"),
+        _api_not_connected("Apify Zillow", "APIFY_TOKEN"),
         _api_not_connected("Regrid", "REGRID_API_KEY"),
         _api_not_connected("ATTOM", "ATTOM_API_KEY"),
     ]
@@ -175,6 +187,32 @@ def get_listing_details(url_or_text: str) -> dict[str, Any]:
         "source": "Manual Listing Text",
         "notes": "Parsed from pasted/manual listing text. Missing fields need manual entry.",
         "data": parsed,
+    }
+
+
+def fetch_apify_zillow_dataset(dataset_id: str, limit: int = 50) -> dict[str, Any]:
+    token = get_secret("APIFY_TOKEN", "") or get_secret("APIFY_API_TOKEN", "")
+    return fetch_dataset_items(dataset_id=dataset_id, token=token, limit=limit)
+
+
+def run_apify_zillow_actor(actor_id: str, actor_input: dict[str, Any] | None = None, limit: int = 50) -> dict[str, Any]:
+    token = get_secret("APIFY_TOKEN", "") or get_secret("APIFY_API_TOKEN", "")
+    return run_actor_for_items(actor_id=actor_id, actor_input=actor_input or {}, token=token, limit=limit)
+
+
+def apify_zillow_result_from_record(record: dict[str, Any]) -> dict[str, Any]:
+    normalized = normalize_zillow_record(record)
+    data = normalized.get("data", {})
+    return {
+        "source": "Apify Zillow",
+        "found": normalized.get("ok", False),
+        **data,
+        "zillow_link": data.get("zillow_link", data.get("listing_url", "")),
+        "arv_source": "Zillow/Apify Sheet" if data.get("arv") else "",
+        "field_sources": normalized.get("field_sources", {}),
+        "apify_warnings": normalized.get("warnings", []),
+        "apify_errors": normalized.get("errors", []),
+        "notes": "Imported from Apify/Zillow normalized record.",
     }
 
 
@@ -563,7 +601,7 @@ def merge_results(results: list[dict]) -> dict:
         if arv_value not in [None, "", 0, 0.0]:
             if source_name == "RentCast":
                 merged["rentcast_arv"] = arv_value
-            elif source_name in ["Master Feed CSV", "Lead Sheet CSV"]:
+            elif source_name in ["Master Feed CSV", "Lead Sheet CSV", "Apify Zillow"]:
                 merged["sheet_arv"] = arv_value
 
         for key in [
