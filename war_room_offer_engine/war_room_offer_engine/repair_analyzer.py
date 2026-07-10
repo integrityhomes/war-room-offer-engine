@@ -7,6 +7,9 @@ from repair_price_book_il import (
     available_repair_levels,
     detect_red_flags,
     estimate_scope,
+    get_market_profile,
+    get_market_multiplier,
+    get_market_wholesale_buyer_percent,
     money,
     quick_scope_from_notes,
 )
@@ -150,6 +153,8 @@ def analyze_repairs(
     if repair_level not in available_repair_levels():
         repair_level = "Rental Ready"
 
+    market_profile = get_market_profile(market)
+
     scope_result = build_repair_scope_from_inputs(
         notes=notes,
         sqft=sqft,
@@ -173,6 +178,9 @@ def analyze_repairs(
 
     return {
         "market": market,
+        "market_profile": market_profile.get("buyer_profile", ""),
+        "market_repair_multiplier": get_market_multiplier(market),
+        "market_wholesale_buyer_percent_default": get_market_wholesale_buyer_percent(market),
         "repair_level": repair_level,
         "notes": notes,
         "scope_items": scope_result["scope_items"],
