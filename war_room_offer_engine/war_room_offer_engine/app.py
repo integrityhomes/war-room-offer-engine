@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
+APP_DIR = Path(__file__).resolve().parent
+REPO_ROOT = APP_DIR.parent.parent
+for import_path in [str(APP_DIR), str(REPO_ROOT)]:
+    if import_path not in sys.path:
+        sys.path.insert(0, import_path)
 
 try:
     from rules import Assumptions, DealInput, analyze_deal, money
@@ -30,15 +38,39 @@ except ImportError:
             from war_room_offer_engine.war_room_offer_engine.ai_writer import build_ai_summary
 
 try:
-    from data_sources import fetch_all_sources, merge_results, get_secret, parse_listing_text, provider_connection_status
+    from data_sources import (
+        fetch_all_sources,
+        merge_results,
+        get_secret,
+        parse_listing_text,
+        provider_connection_status,
+    )
 except ImportError:
     try:
-        from .data_sources import fetch_all_sources, merge_results, get_secret, parse_listing_text, provider_connection_status
+        from .data_sources import (
+            fetch_all_sources,
+            merge_results,
+            get_secret,
+            parse_listing_text,
+            provider_connection_status,
+        )
     except ImportError:
         try:
-            from war_room_offer_engine.data_sources import fetch_all_sources, merge_results, get_secret, parse_listing_text, provider_connection_status
+            from war_room_offer_engine.data_sources import (
+                fetch_all_sources,
+                merge_results,
+                get_secret,
+                parse_listing_text,
+                provider_connection_status,
+            )
         except ImportError:
-            from war_room_offer_engine.war_room_offer_engine.data_sources import fetch_all_sources, merge_results, get_secret, parse_listing_text, provider_connection_status
+            from war_room_offer_engine.war_room_offer_engine.data_sources import (
+                fetch_all_sources,
+                merge_results,
+                get_secret,
+                parse_listing_text,
+                provider_connection_status,
+            )
 
 try:
     from repair_analyzer import analyze_repairs, repair_number_for_offer
