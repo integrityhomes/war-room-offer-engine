@@ -10,15 +10,28 @@ from ai_writer import build_ai_summary
 from data_sources import fetch_all_sources, merge_results, get_secret
 from repair_analyzer import analyze_repairs, repair_number_for_offer
 try:
-    from repair_price_book_il import available_markets, get_market_buy_box_max, get_market_profile, get_market_wholesale_buyer_percent
+    from repair_price_book_il import (
+        available_markets,
+        get_market_profile,
+        get_market_slow_flip_lead_search_max,
+        get_market_slow_flip_max_buy_price,
+        get_market_wholesale_buyer_percent,
+    )
 except ImportError:
     try:
-        from .repair_price_book_il import available_markets, get_market_buy_box_max, get_market_profile, get_market_wholesale_buyer_percent
+        from .repair_price_book_il import (
+            available_markets,
+            get_market_profile,
+            get_market_slow_flip_lead_search_max,
+            get_market_slow_flip_max_buy_price,
+            get_market_wholesale_buyer_percent,
+        )
     except ImportError:
         from war_room_offer_engine.repair_price_book_il import (
             available_markets,
-            get_market_buy_box_max,
             get_market_profile,
+            get_market_slow_flip_lead_search_max,
+            get_market_slow_flip_max_buy_price,
             get_market_wholesale_buyer_percent,
         )
 from media_notes import generate_boots_on_ground_notes
@@ -50,7 +63,7 @@ FIELD_DEFAULTS = {
     "manual_repair_estimate": 0,
     "manual_repair_notes": "",
     "repair_source": "Missing",
-    "manual_slow_flip_buy_box_max_override": 0,
+    "manual_slow_flip_max_override": 0,
     "notes": "",
 }
 
@@ -158,15 +171,15 @@ def market_wholesale_percent_used(
     return max(buyer_percent, 0.50), adjustments
 
 
-def resolve_slow_flip_buy_box_max(market: str) -> tuple[float, str]:
-    manual_override = safe_float(st.session_state.get("manual_slow_flip_buy_box_max_override", 0))
+def resolve_slow_flip_max_buy_price(market: str) -> tuple[float, str]:
+    manual_override = safe_float(st.session_state.get("manual_slow_flip_max_override", 0))
     if manual_override > 0:
         return manual_override, "Manual Override"
-    return get_market_buy_box_max(market), "Market Default"
+    return get_market_slow_flip_max_buy_price(market), "Market Default"
 
 
-def is_above_slow_flip_buy_box(buy_price: float, slow_flip_buy_box_max: float) -> bool:
-    return slow_flip_buy_box_max > 0 and safe_float(buy_price) > slow_flip_buy_box_max
+def is_above_slow_flip_max_buy_price(buy_price: float, slow_flip_max_buy_price: float) -> bool:
+    return slow_flip_max_buy_price > 0 and safe_float(buy_price) > slow_flip_max_buy_price
 
 
 def update_state_from_auto_pull(data: dict) -> None:
@@ -258,9 +271,9 @@ def build_extra_risk_flags(
     if (
         deal.exit_mode in ["Slow Flip Only", "Auto"]
         and result.get("best_exit") != "Wholesale"
-        and slow_flip.get("above_slow_flip_buy_box")
+        and slow_flip.get("above_slow_flip_max_buy_price")
     ):
-        risks.append("Above Slow Flip Buy Box")
+        risks.append("Above Slow Flip Max Buy Price")
 
     slow = result.get("slow_flip", {})
     if slow.get("rent_formula_max_offer_before_cap", 0) > assumptions.slow_flip_max_offer_cap:
@@ -366,6 +379,22 @@ def render_final_decision_box(
         d2.metric("Internal Max Offer", money(best.get("max_offer", 0)))
         d3.metric("Best Exit", result["best_exit"])
 
+        slow = result.get("slow_flip", {})
+        s1, s2, s3 = st.columns(3)
+        s1.metric(
+            "Slow Flip Lead Search Max",
+            money(st.session_state.get("slow_flip_lead_search_max", 0))
+            if st.session_state.get("slow_flip_lead_search_max", 0)
+            else "Not set",
+        )
+        s2.metric(
+            "Slow Flip Max Buy Price",
+            money(slow.get("slow_flip_max_buy_price", 0))
+            if slow.get("slow_flip_max_buy_price", 0)
+            else "Not set",
+        )
+        s3.metric("Above Slow Flip Max Buy Price?", "Yes" if slow.get("above_slow_flip_max_buy_price") else "No")
+
         st.write("Why this decision:")
         st.write(decision_reason)
 
@@ -408,10 +437,11 @@ def build_deal_log_row(
     best = result["best"]
     market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
     result_assumptions = result.get("assumptions", {})
-    slow_flip_buy_box_max, slow_flip_buy_box_source = resolve_slow_flip_buy_box_max(st.session_state.get("repair_market", "Central IL"))
-    above_slow_flip_buy_box = (
+    slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
+    slow_flip_max_buy_price, slow_flip_max_source = resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
+    above_slow_flip_max_buy_price = (
         deal.exit_mode in ["Slow Flip Only", "Auto"]
-        and is_above_slow_flip_buy_box(deal.asking_price, slow_flip_buy_box_max)
+        and is_above_slow_flip_max_buy_price(deal.asking_price, slow_flip_max_buy_price)
     )
     return {
         "date_time_analyzed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -428,9 +458,10 @@ def build_deal_log_row(
         "value_source": value_source,
         "manual_comps_average": manual_comps_average(),
         "market_profile": market_profile.get("buyer_profile", ""),
-        "slow_flip_buy_box_max": slow_flip_buy_box_max,
-        "slow_flip_buy_box_source": slow_flip_buy_box_source,
-        "above_slow_flip_buy_box": "Yes" if above_slow_flip_buy_box else "No",
+        "slow_flip_lead_search_max": slow_flip_lead_search_max,
+        "slow_flip_max_buy_price": slow_flip_max_buy_price,
+        "above_slow_flip_max_buy_price": "Yes" if above_slow_flip_max_buy_price else "No",
+        "slow_flip_max_source": slow_flip_max_source,
         "market_repair_multiplier": market_profile.get("repair_multiplier", 1.0),
         "market_wholesale_buyer_percent_default": result_assumptions.get(
             "market_wholesale_buyer_percent",
@@ -511,8 +542,8 @@ assumptions = Assumptions(
     market_wholesale_buyer_percent=float(wholesale_buyer_percent_arv),
     slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
     slow_flip_first_offer_gap=float(slow_flip_first_offer_gap),
-    slow_flip_buy_box_max=float(st.session_state.get("slow_flip_buy_box_max_used", 0) or 0),
-    slow_flip_buy_box_source=st.session_state.get("slow_flip_buy_box_source", "Market Default"),
+    slow_flip_max_buy_price=float(st.session_state.get("slow_flip_max_buy_price_used", 0) or 0),
+    slow_flip_max_source=st.session_state.get("slow_flip_max_source", "Market Default"),
 )
 
 st.subheader("1. Pull Property Data")
@@ -641,19 +672,23 @@ with col3:
         key="repair_market",
     )
     st.number_input(
-        "Manual slow flip buy box max override",
+        "Manual Slow Flip Max Override",
         min_value=0,
         step=5000,
-        key="manual_slow_flip_buy_box_max_override",
-        help="Leave at $0 to use the market default. Every Virginia market defaults to $80,000.",
+        key="manual_slow_flip_max_override",
+        help="Leave at $0 to use the market default. Every Virginia market defaults to a $50,000 slow-flip max buy price.",
     )
-    slow_flip_buy_box_max, slow_flip_buy_box_source = resolve_slow_flip_buy_box_max(st.session_state.get("repair_market", "Central IL"))
-    st.session_state["slow_flip_buy_box_max_used"] = int(slow_flip_buy_box_max) if slow_flip_buy_box_max > 0 else 0
-    st.session_state["slow_flip_buy_box_source"] = slow_flip_buy_box_source
-    if slow_flip_buy_box_max > 0:
-        st.info(f"Slow Flip Buy Box Max: {money(slow_flip_buy_box_max)} ({slow_flip_buy_box_source})")
+    slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
+    slow_flip_max_buy_price, slow_flip_max_source = resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
+    st.session_state["slow_flip_lead_search_max"] = int(slow_flip_lead_search_max) if slow_flip_lead_search_max > 0 else 0
+    st.session_state["slow_flip_max_buy_price_used"] = int(slow_flip_max_buy_price) if slow_flip_max_buy_price > 0 else 0
+    st.session_state["slow_flip_max_source"] = slow_flip_max_source
+    if slow_flip_lead_search_max > 0:
+        st.info(f"Slow Flip Lead Search Max: {money(slow_flip_lead_search_max)}")
+    if slow_flip_max_buy_price > 0:
+        st.info(f"Slow Flip Max Buy Price: {money(slow_flip_max_buy_price)} ({slow_flip_max_source})")
     else:
-        st.info("Slow Flip Buy Box Max: Not set")
+        st.info("Slow Flip Max Buy Price: Not set")
 
     r2, r3 = st.columns(2)
 
@@ -864,9 +899,11 @@ with col3:
     st.caption(f"Value Source: {value_source}")
 
     market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
-    slow_flip_buy_box_max, slow_flip_buy_box_source = resolve_slow_flip_buy_box_max(st.session_state.get("repair_market", "Central IL"))
-    st.session_state["slow_flip_buy_box_max_used"] = int(slow_flip_buy_box_max) if slow_flip_buy_box_max > 0 else 0
-    st.session_state["slow_flip_buy_box_source"] = slow_flip_buy_box_source
+    slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
+    slow_flip_max_buy_price, slow_flip_max_source = resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
+    st.session_state["slow_flip_lead_search_max"] = int(slow_flip_lead_search_max) if slow_flip_lead_search_max > 0 else 0
+    st.session_state["slow_flip_max_buy_price_used"] = int(slow_flip_max_buy_price) if slow_flip_max_buy_price > 0 else 0
+    st.session_state["slow_flip_max_source"] = slow_flip_max_source
     market_default_buyer_percent = get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
     market_buyer_percent, market_adjustments = market_wholesale_percent_used(
         market=st.session_state.get("repair_market", "Central IL"),
@@ -882,11 +919,13 @@ with col3:
     p1.info(f"Market Profile: {market_profile.get('buyer_profile', 'Normal investor market')}")
     p2.info(f"Market Repair Multiplier: {float(market_profile.get('repair_multiplier', 1.0)):.2f}x")
     p3.info(f"Wholesale Buyer % Source: {wholesale_buyer_percent_source}")
-    if slow_flip_buy_box_max > 0:
+    if slow_flip_lead_search_max > 0:
+        st.caption(f"Slow Flip Lead Search Max: {money(slow_flip_lead_search_max)}")
+    if slow_flip_max_buy_price > 0:
         current_buy_price = safe_float(st.session_state.get("contract_price", 0)) or safe_float(st.session_state.get("asking_price", 0))
-        above_slow_flip_buy_box = is_above_slow_flip_buy_box(current_buy_price, slow_flip_buy_box_max)
-        st.caption(f"Slow Flip Buy Box Max: {money(slow_flip_buy_box_max)} ({slow_flip_buy_box_source})")
-        st.caption(f"Above Slow Flip Buy Box? {'Yes' if above_slow_flip_buy_box else 'No'}")
+        above_slow_flip_max_buy_price = is_above_slow_flip_max_buy_price(current_buy_price, slow_flip_max_buy_price)
+        st.caption(f"Slow Flip Max Buy Price: {money(slow_flip_max_buy_price)} ({slow_flip_max_source})")
+        st.caption(f"Above Slow Flip Max Buy Price? {'Yes' if above_slow_flip_max_buy_price else 'No'}")
     st.caption(f"Market buyer % of ARV used: {percent_label(final_wholesale_buyer_percent)}")
     if not manual_wholesale_override and market_adjustments:
         st.caption(" ".join(market_adjustments))
@@ -929,9 +968,11 @@ if analyze:
     if resolved_arv <= 0:
         st.warning("ARV is missing. Add ARV or manual comps before making a final offer.")
 
-    slow_flip_buy_box_max, slow_flip_buy_box_source = resolve_slow_flip_buy_box_max(st.session_state.get("repair_market", "Central IL"))
-    st.session_state["slow_flip_buy_box_max_used"] = int(slow_flip_buy_box_max) if slow_flip_buy_box_max > 0 else 0
-    st.session_state["slow_flip_buy_box_source"] = slow_flip_buy_box_source
+    slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
+    slow_flip_max_buy_price, slow_flip_max_source = resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
+    st.session_state["slow_flip_lead_search_max"] = int(slow_flip_lead_search_max) if slow_flip_lead_search_max > 0 else 0
+    st.session_state["slow_flip_max_buy_price_used"] = int(slow_flip_max_buy_price) if slow_flip_max_buy_price > 0 else 0
+    st.session_state["slow_flip_max_source"] = slow_flip_max_source
     market_default_buyer_percent = get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
     final_wholesale_buyer_percent, market_adjustments = market_wholesale_percent_used(
         market=st.session_state.get("repair_market", "Central IL"),
@@ -955,8 +996,18 @@ if analyze:
         market_wholesale_buyer_percent=float(market_default_buyer_percent),
         slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
         slow_flip_first_offer_gap=float(slow_flip_first_offer_gap),
-        slow_flip_buy_box_max=float(slow_flip_buy_box_max),
-        slow_flip_buy_box_source=slow_flip_buy_box_source,
+        slow_flip_max_buy_price=float(slow_flip_max_buy_price),
+        slow_flip_max_source=slow_flip_max_source,
+    )
+
+    analysis_notes = "\n".join(
+        part
+        for part in [
+            st.session_state.get("notes", ""),
+            st.session_state.get("repair_notes", ""),
+            st.session_state.get("manual_repair_notes", ""),
+        ]
+        if str(part or "").strip()
     )
 
     deal = DealInput(
@@ -974,7 +1025,7 @@ if analyze:
         occupancy=st.session_state["occupancy"],
         livable=st.session_state["livable"],
         days_on_market=int(st.session_state["days_on_market"]),
-        notes=st.session_state["notes"],
+        notes=analysis_notes,
         arv=float(resolved_arv or 0),
         repairs=float(st.session_state.get("repairs", 0) or 0),
     )
@@ -1020,9 +1071,10 @@ if analyze:
             "Internal max offer": money(slow["max_offer"]),
             "Rent formula max before cap": money(slow.get("rent_formula_max_offer_before_cap", 0)),
             "Normal slow flip cap": money(slow.get("normal_slow_flip_cap", 0)),
-            "Slow Flip Buy Box Max": money(slow.get("slow_flip_buy_box_max", 0)) if slow.get("slow_flip_buy_box_max", 0) > 0 else "Not set",
-            "Slow Flip Buy Box Source": slow.get("slow_flip_buy_box_source", ""),
-            "Above Slow Flip Buy Box?": "Yes" if slow.get("above_slow_flip_buy_box") else "No",
+            "Slow Flip Lead Search Max": money(slow_flip_lead_search_max) if slow_flip_lead_search_max > 0 else "Not set",
+            "Slow Flip Max Buy Price": money(slow.get("slow_flip_max_buy_price", 0)) if slow.get("slow_flip_max_buy_price", 0) > 0 else "Not set",
+            "Slow Flip Max Source": slow.get("slow_flip_max_source", ""),
+            "Above Slow Flip Max Buy Price?": "Yes" if slow.get("above_slow_flip_max_buy_price") else "No",
             "Estimated fee at buy price": money(slow["estimated_fee_at_ask"]),
         })
         slow_resale_value = float(slow.get("resale_to_slow_flipper", 0) or 0)

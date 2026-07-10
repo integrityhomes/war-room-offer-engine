@@ -16,8 +16,8 @@ class Assumptions:
     market_wholesale_buyer_percent: float = 0.70
     slow_flip_max_offer_cap: float = 32000
     slow_flip_first_offer_gap: float = 4000
-    slow_flip_buy_box_max: float = 0
-    slow_flip_buy_box_source: str = "Market Default"
+    slow_flip_max_buy_price: float = 0
+    slow_flip_max_source: str = "Market Default"
 
 
 @dataclass
@@ -52,19 +52,48 @@ def clamp_nonnegative(value: float) -> float:
     return max(float(value or 0), 0)
 
 
+def slow_flip_functional_risks(notes: str) -> list[str]:
+    text = str(notes or "").lower()
+    risk_terms = {
+        "low ceilings": ["low ceiling", "low ceilings", "ceiling height"],
+        "no driveway": ["no driveway", "no parking", "shared driveway", "street parking only"],
+        "termite damage": ["termite", "termites", "wood destroying", "wdi"],
+        "weak rent comps": ["weak rent comp", "weak rent comps", "rent comps weak", "low rent comps", "rent support weak"],
+    }
+    risks = []
+    for label, terms in risk_terms.items():
+        if any(term in text for term in terms):
+            risks.append(label)
+    return risks
+
+
 def calc_slow_flip(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
     rent = clamp_nonnegative(deal.rent)
     asking = clamp_nonnegative(deal.asking_price)
+    arv = clamp_nonnegative(deal.arv)
+    repairs = clamp_nonnegative(deal.repairs)
 
     resale_to_slow_flipper = rent * a.slow_flip_rent_multiple
     rent_formula_max_offer = max(resale_to_slow_flipper - a.min_assignment_fee - a.close_title_buffer, 0)
-    slow_flip_buy_box_max = clamp_nonnegative(getattr(a, "slow_flip_buy_box_max", 0))
-    above_slow_flip_buy_box = slow_flip_buy_box_max > 0 and asking > slow_flip_buy_box_max
+    value_repair_max_offer = max((arv * 0.65) - repairs - a.min_assignment_fee - a.close_title_buffer, 0) if arv > 0 else 0
+    functional_risks = slow_flip_functional_risks(deal.notes)
+    risk_adjustment = 0.85 if functional_risks else 1.00
+    adjusted_rent_formula_max_offer = rent_formula_max_offer * risk_adjustment
+    adjusted_value_repair_max_offer = value_repair_max_offer * risk_adjustment if value_repair_max_offer > 0 else 0
+    slow_flip_max_buy_price = clamp_nonnegative(getattr(a, "slow_flip_max_buy_price", 0))
+    above_slow_flip_max_buy_price = slow_flip_max_buy_price > 0 and asking > slow_flip_max_buy_price
 
     # Bradley slow-flip rule: 98% of slow-flip offers stay at or below $32,000.
     # The rent formula still runs, but the public offer/max is capped unless a human approves an exception.
     normal_cap = clamp_nonnegative(getattr(a, "slow_flip_max_offer_cap", 32000))
-    max_contract_price = min(rent_formula_max_offer, normal_cap) if normal_cap > 0 else rent_formula_max_offer
+    max_candidates = [adjusted_rent_formula_max_offer]
+    if adjusted_value_repair_max_offer > 0:
+        max_candidates.append(adjusted_value_repair_max_offer)
+    if normal_cap > 0:
+        max_candidates.append(normal_cap)
+    if slow_flip_max_buy_price > 0:
+        max_candidates.append(slow_flip_max_buy_price)
+    max_contract_price = min(max_candidates)
 
     # Slow flip negotiation rule:
     # The max offer is internal only. We do NOT send the max as the first offer.
@@ -90,10 +119,14 @@ def calc_slow_flip(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
         "offer_to_send": offer_to_send,
         "max_offer": max_contract_price,
         "rent_formula_max_offer_before_cap": rent_formula_max_offer,
+        "risk_adjusted_rent_formula_max_offer": adjusted_rent_formula_max_offer,
+        "value_repair_max_offer_before_cap": value_repair_max_offer,
+        "risk_adjusted_value_repair_max_offer": adjusted_value_repair_max_offer,
         "normal_slow_flip_cap": normal_cap,
-        "slow_flip_buy_box_max": slow_flip_buy_box_max,
-        "slow_flip_buy_box_source": getattr(a, "slow_flip_buy_box_source", "Market Default"),
-        "above_slow_flip_buy_box": above_slow_flip_buy_box,
+        "slow_flip_max_buy_price": slow_flip_max_buy_price,
+        "slow_flip_max_source": getattr(a, "slow_flip_max_source", "Market Default"),
+        "above_slow_flip_max_buy_price": above_slow_flip_max_buy_price,
+        "functional_risks": functional_risks,
         "estimated_fee_at_ask": estimated_fee_at_ask,
         "spread": resale_to_slow_flipper - asking if asking else resale_to_slow_flipper,
     }
@@ -143,7 +176,7 @@ def choose_best_exit(wholesale: Dict[str, Any], slow_flip: Dict[str, Any], deal:
     if any(word in notes for word in ["fire", "foundation", "condemned", "tear down", "teardown"]):
         return "Needs Human Review"
     if deal.exit_mode == "Slow Flip Only":
-        if slow_flip.get("above_slow_flip_buy_box"):
+        if slow_flip.get("above_slow_flip_max_buy_price") or slow_flip.get("functional_risks"):
             return "Needs Human Review"
         if livable == "no":
             return "Needs Human Review"
@@ -155,7 +188,8 @@ def choose_best_exit(wholesale: Dict[str, Any], slow_flip: Dict[str, Any], deal:
         deal.rent >= 700
         and slow_flip["estimated_fee_at_ask"] >= 5000
         and livable != "no"
-        and not slow_flip.get("above_slow_flip_buy_box")
+        and not slow_flip.get("above_slow_flip_max_buy_price")
+        and not slow_flip.get("functional_risks")
     ):
         return "Slow Flip"
     if wholesale["estimated_fee_at_ask"] >= 5000:
@@ -252,7 +286,8 @@ def analyze_deal(deal: DealInput, assumptions: Assumptions | None = None) -> Dic
             "Slow Flip"
             if (
                 deal.livable != "No"
-                and not slow_flip.get("above_slow_flip_buy_box")
+                and not slow_flip.get("above_slow_flip_max_buy_price")
+                and not slow_flip.get("functional_risks")
                 and slow_flip["estimated_fee_at_ask"] >= a.exception_assignment_fee
             )
             else "Needs Human Review"
@@ -279,8 +314,10 @@ def analyze_deal(deal: DealInput, assumptions: Assumptions | None = None) -> Dic
     grade = grade_deal(best, deal.asking_price, a) if best_exit != "Pass" else "Pass"
     risks = risk_notes(deal, best_exit)
 
-    if slow_flip.get("above_slow_flip_buy_box") and deal.exit_mode in ["Slow Flip Only", "Auto"] and best_exit != "Wholesale":
-        risks.insert(0, f"Above Slow Flip Buy Box. Buy price is above the slow-flip buy box max of {money(slow_flip.get('slow_flip_buy_box_max', 0))}. Lean human review or pass unless rent/payment/ARV strongly supports the exception.")
+    if slow_flip.get("above_slow_flip_max_buy_price") and deal.exit_mode in ["Slow Flip Only", "Auto"] and best_exit != "Wholesale":
+        risks.insert(0, f"Above Slow Flip Max Buy Price. Buy price is above the slow-flip max buy price of {money(slow_flip.get('slow_flip_max_buy_price', 0))}. Lean human review or pass unless rent/payment/ARV strongly supports the exception.")
+    if slow_flip.get("functional_risks") and deal.exit_mode in ["Slow Flip Only", "Auto"] and best_exit != "Wholesale":
+        risks.insert(0, "Slow flip functional risk: " + ", ".join(slow_flip.get("functional_risks", [])) + ". Push offer lower and require human review.")
     if best.get("exit") == "Slow Flip" and deal.asking_price > best.get("max_offer", 0) > 0:
         risks.insert(0, f"Asking price is above the normal slow-flip max of {money(best.get('max_offer', 0))}. Do not chase unless there is a pre-committed buyer or Shawn/Sabrina approves the exception.")
     if best.get("exit") == "Slow Flip" and best.get("rent_formula_max_offer_before_cap", 0) > best.get("max_offer", 0):
