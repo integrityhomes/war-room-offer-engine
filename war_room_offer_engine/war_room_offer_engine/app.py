@@ -5,10 +5,50 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from rules import Assumptions, DealInput, analyze_deal, money
-from ai_writer import build_ai_summary
-from data_sources import fetch_all_sources, merge_results, get_secret
-from repair_analyzer import analyze_repairs, repair_number_for_offer
+try:
+    from rules import Assumptions, DealInput, analyze_deal, money
+except ImportError:
+    try:
+        from .rules import Assumptions, DealInput, analyze_deal, money
+    except ImportError:
+        try:
+            from war_room_offer_engine.rules import Assumptions, DealInput, analyze_deal, money
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.rules import Assumptions, DealInput, analyze_deal, money
+
+try:
+    from ai_writer import build_ai_summary
+except ImportError:
+    try:
+        from .ai_writer import build_ai_summary
+    except ImportError:
+        try:
+            from war_room_offer_engine.ai_writer import build_ai_summary
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.ai_writer import build_ai_summary
+
+try:
+    from data_sources import fetch_all_sources, merge_results, get_secret
+except ImportError:
+    try:
+        from .data_sources import fetch_all_sources, merge_results, get_secret
+    except ImportError:
+        try:
+            from war_room_offer_engine.data_sources import fetch_all_sources, merge_results, get_secret
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.data_sources import fetch_all_sources, merge_results, get_secret
+
+try:
+    from repair_analyzer import analyze_repairs, repair_number_for_offer
+except ImportError:
+    try:
+        from .repair_analyzer import analyze_repairs, repair_number_for_offer
+    except ImportError:
+        try:
+            from war_room_offer_engine.repair_analyzer import analyze_repairs, repair_number_for_offer
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.repair_analyzer import analyze_repairs, repair_number_for_offer
+
 try:
     from repair_price_book_il import (
         available_markets,
@@ -27,14 +67,33 @@ except ImportError:
             get_market_wholesale_buyer_percent,
         )
     except ImportError:
-        from war_room_offer_engine.repair_price_book_il import (
-            available_markets,
-            get_market_profile,
-            get_market_slow_flip_lead_search_max,
-            get_market_slow_flip_max_buy_price,
-            get_market_wholesale_buyer_percent,
-        )
-from media_notes import generate_boots_on_ground_notes
+        try:
+            from war_room_offer_engine.repair_price_book_il import (
+                available_markets,
+                get_market_profile,
+                get_market_slow_flip_lead_search_max,
+                get_market_slow_flip_max_buy_price,
+                get_market_wholesale_buyer_percent,
+            )
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.repair_price_book_il import (
+                available_markets,
+                get_market_profile,
+                get_market_slow_flip_lead_search_max,
+                get_market_slow_flip_max_buy_price,
+                get_market_wholesale_buyer_percent,
+            )
+
+try:
+    from media_notes import generate_boots_on_ground_notes
+except ImportError:
+    try:
+        from .media_notes import generate_boots_on_ground_notes
+    except ImportError:
+        try:
+            from war_room_offer_engine.media_notes import generate_boots_on_ground_notes
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.media_notes import generate_boots_on_ground_notes
 st.set_page_config(page_title="War Room Offer Engine", page_icon="🏠", layout="wide")
 
 FIELD_DEFAULTS = {

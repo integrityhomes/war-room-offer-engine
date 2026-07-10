@@ -8,7 +8,16 @@ from PIL import Image
 import cv2
 from openai import OpenAI
 
-from data_sources import get_secret
+try:
+    from data_sources import get_secret
+except ImportError:
+    try:
+        from .data_sources import get_secret
+    except ImportError:
+        try:
+            from war_room_offer_engine.data_sources import get_secret
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.data_sources import get_secret
 
 
 MODEL_NAME = "gpt-4.1-mini"

@@ -28,17 +28,30 @@ except ImportError:
             quick_scope_from_notes,
         )
     except ImportError:
-        from war_room_offer_engine.repair_price_book_il import (
-            available_markets,
-            available_repair_levels,
-            detect_red_flags,
-            estimate_scope,
-            get_market_profile,
-            get_market_multiplier,
-            get_market_wholesale_buyer_percent,
-            money,
-            quick_scope_from_notes,
-        )
+        try:
+            from war_room_offer_engine.repair_price_book_il import (
+                available_markets,
+                available_repair_levels,
+                detect_red_flags,
+                estimate_scope,
+                get_market_profile,
+                get_market_multiplier,
+                get_market_wholesale_buyer_percent,
+                money,
+                quick_scope_from_notes,
+            )
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.repair_price_book_il import (
+                available_markets,
+                available_repair_levels,
+                detect_red_flags,
+                estimate_scope,
+                get_market_profile,
+                get_market_multiplier,
+                get_market_wholesale_buyer_percent,
+                money,
+                quick_scope_from_notes,
+            )
 
 
 IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"]
