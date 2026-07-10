@@ -28,6 +28,31 @@ class Assumptions:
     above_slow_flip_max_buy_price: bool = False
 
 
+def build_default_assumptions_for_test() -> Assumptions:
+    return Assumptions(
+        min_assignment_fee=10000,
+        exception_assignment_fee=5000,
+        slow_flip_rent_multiple=45,
+        close_title_buffer=1500,
+        target_offer_discount=0.85,
+        wholesale_buyer_percent_arv=0.70,
+        wholesale_buyer_percent_source="Market Default",
+        wholesale_buyer_percent_range="",
+        wholesale_buyer_percent_reason="Smoke test default",
+        market_liquidity_tier="Normal investor market",
+        market_wholesale_buyer_percent=0.70,
+        slow_flip_max_offer_cap=32000,
+        slow_flip_first_offer_gap=4000,
+        slow_flip_lead_search_max=85000,
+        slow_flip_lead_search_source="Market Default",
+        above_slow_flip_lead_search_range=False,
+        inside_slow_flip_lead_search_range=True,
+        slow_flip_max_buy_price=50000,
+        slow_flip_max_source="Market Default",
+        above_slow_flip_max_buy_price=False,
+    )
+
+
 @dataclass
 class DealInput:
     address: str

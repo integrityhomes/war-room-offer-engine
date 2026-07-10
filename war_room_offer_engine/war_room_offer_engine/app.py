@@ -10,11 +10,20 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+# Developer validation before merge:
+# python -m py_compile war_room_offer_engine/war_room_offer_engine/app.py
+# python -m py_compile war_room_offer_engine/war_room_offer_engine/rules.py
+# python -m py_compile war_room_offer_engine/war_room_offer_engine/repair_analyzer.py
+# python -m py_compile war_room_offer_engine/war_room_offer_engine/repair_price_book_il.py
+# python -m py_compile war_room_offer_engine/war_room_offer_engine/data_sources.py
+# python war_room_offer_engine/war_room_offer_engine/startup_smoke_test.py
+
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent.parent
-for import_path in [str(APP_DIR), str(REPO_ROOT)]:
-    if import_path not in sys.path:
-        sys.path.insert(0, import_path)
+for import_path in [str(REPO_ROOT), str(APP_DIR)]:
+    if import_path in sys.path:
+        sys.path.remove(import_path)
+    sys.path.insert(0, import_path)
 
 try:
     _rules_spec = importlib.util.spec_from_file_location("war_room_offer_engine_local_rules", APP_DIR / "rules.py")
