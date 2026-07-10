@@ -112,9 +112,18 @@ repair_analysis = repair_analyzer.analyze_repairs(
     uploaded_files=[],
     market="Central IL",
     repair_level="Rental Ready",
+    pricing_mode="Licensed contractor",
+    repair_scope_confidence="Photos only",
+    market_labor_cost="Normal market",
+    repair_cushion_percent=10,
+    manual_repair_adjustment=500,
 )
 check(repair_analysis.get("recommended_repair_number", 0) > 0, "repair breakdown generates a number")
 check(repair_analyzer.repair_number_for_offer(repair_analysis) > 0, "repair number for offer works")
+repair_calibration = repair_analysis.get("repair_calibration", {})
+check(repair_calibration.get("base_repair_estimate", 0) > 0, "repair calibration tracks base estimate")
+check(repair_calibration.get("final_repair_estimate", 0) == repair_analysis.get("recommended_repair_number", 0), "repair calibration drives final repair number")
+check(repair_calibration.get("repair_math_rows"), "repair calibration exposes full repair math rows")
 
 for function_name in [
     "fetch_all_sources",

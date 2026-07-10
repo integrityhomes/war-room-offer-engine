@@ -175,6 +175,12 @@ FIELD_DEFAULTS = {
     "manual_repair_estimate": 0,
     "manual_repair_notes": "",
     "repair_source": "Missing",
+    "repair_pricing_mode": "Investor standard",
+    "repair_scope_confidence": "Unknown",
+    "market_labor_cost": "Unknown",
+    "repair_cushion_percent": "10%",
+    "manual_repair_adjustment": 0,
+    "show_full_repair_math": False,
     "manual_slow_flip_max_override": 0,
     "mold_verified": "Unknown",
     "listing_url": "",
@@ -220,6 +226,10 @@ def mold_word_allowed() -> bool:
         "Yes - inspector verified",
         "Yes - seller disclosed",
     ]
+
+
+def mold_verified_bool() -> bool:
+    return mold_word_allowed()
 
 
 def safe_condition_text(text: str) -> str:
@@ -733,18 +743,27 @@ def render_simple_deal_answer(simple_answer: dict) -> None:
 def repair_source_label() -> str:
     manual = safe_float(st.session_state.get("manual_repair_estimate", 0))
     ai = safe_float(st.session_state.get("recommended_repairs_from_analyzer", 0))
-    if manual > 0 and ai > 0:
-        return "Mixed"
     if manual > 0:
-        return "Manual"
+        return "Manual Repair Estimate"
     if ai > 0:
-        return "AI / Price book"
+        return "AI Repair Estimate"
     return "Missing"
+
+
+def repair_cushion_percent_value() -> float:
+    raw_value = st.session_state.get("repair_cushion_percent", "0%")
+    return safe_float(str(raw_value).replace("%", ""), 0)
+
+
+def repair_calibration_from_analysis() -> dict:
+    analysis = st.session_state.get("repair_analysis") or {}
+    return analysis.get("repair_calibration", {}) or {}
 
 
 def build_repair_breakdown() -> dict:
     analysis = st.session_state.get("repair_analysis") or {}
     estimate = analysis.get("estimate", {})
+    calibration = repair_calibration_from_analysis()
     line_items = []
     for item in estimate.get("line_items", []) or []:
         line_items.append(
@@ -784,7 +803,7 @@ def build_repair_breakdown() -> dict:
     else:
         confidence_label = "Low"
 
-    explanation = "Repair estimate is based on manual input." if safe_float(st.session_state.get("manual_repair_estimate", 0)) > 0 else "Repair estimate is based on price-book items detected from notes/media."
+    explanation = "Repair estimate is based on manual input." if safe_float(st.session_state.get("manual_repair_estimate", 0)) > 0 else calibration.get("repair_number_explanation", "Repair estimate is based on price-book items detected from notes/media.")
     if triggers:
         explanation += " Repairs are driven by: " + ", ".join(sorted(set(triggers))) + "."
     if total_repairs > 50000:
@@ -799,7 +818,36 @@ def build_repair_breakdown() -> dict:
         "market_multiplier": analysis.get("market_repair_multiplier", ""),
         "risk_allowance": estimate.get("contingency_pct", 0),
         "repair_explanation": safe_condition_text(explanation),
+        "repair_calibration": calibration,
     }
+
+
+def render_repair_number_explanation(calibration: dict) -> None:
+    if not calibration:
+        return
+
+    st.subheader("Repair Number Explanation")
+    with st.container(border=True):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Base repair estimate", money(calibration.get("base_repair_estimate", 0)))
+        c2.metric("Pricing mode adjustment", money(calibration.get("repair_pricing_adjustment", 0)))
+        c3.metric("Market labor adjustment", money(calibration.get("market_labor_adjustment", 0)))
+
+        c4, c5, c6 = st.columns(3)
+        c4.metric("Repair cushion", money(calibration.get("repair_risk_cushion", 0)))
+        c5.metric("Manual adjustment", money(calibration.get("manual_repair_adjustment", 0)))
+        c6.metric("Final repair estimate", money(calibration.get("final_repair_estimate", 0)))
+
+        st.write(safe_condition_text(calibration.get("repair_number_explanation", "")))
+        for warning in calibration.get("caution_warnings", []):
+            st.warning(safe_condition_text(warning))
+
+        if st.session_state.get("show_full_repair_math", False):
+            rows = calibration.get("repair_math_rows", [])
+            if rows:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            else:
+                st.info("No repair math rows yet. Generate a repair estimate from notes/media first.")
 
 
 def render_repair_estimate_breakdown(breakdown: dict) -> None:
@@ -819,6 +867,7 @@ def render_repair_estimate_breakdown(breakdown: dict) -> None:
             st.dataframe(pd.DataFrame(breakdown["line_items"]), use_container_width=True)
         else:
             st.info("No price-book line items yet. Enter repair notes, upload media, or add a manual repair estimate.")
+    render_repair_number_explanation(breakdown.get("repair_calibration", {}))
 
 
 def render_final_decision_box(
@@ -952,6 +1001,16 @@ def build_deal_log_row(
         "repairs": deal.repairs,
         "repair_source": st.session_state.get("repair_source", "Missing"),
         "manual_repair_notes": st.session_state.get("manual_repair_notes", ""),
+        "repair_pricing_mode": st.session_state.get("repair_pricing_mode", "Investor standard"),
+        "repair_scope_confidence": st.session_state.get("repair_scope_confidence", "Unknown"),
+        "market_labor_cost": st.session_state.get("market_labor_cost", "Unknown"),
+        "manual_repair_adjustment": st.session_state.get("manual_repair_adjustment", 0),
+        "repair_cushion_percent": repair_cushion_percent_value(),
+        "base_repair_estimate": repair_breakdown.get("repair_calibration", {}).get("base_repair_estimate", 0),
+        "repair_pricing_adjustment": repair_breakdown.get("repair_calibration", {}).get("repair_pricing_adjustment", 0),
+        "repair_risk_cushion": repair_breakdown.get("repair_calibration", {}).get("repair_risk_cushion", 0),
+        "final_repair_estimate": repair_breakdown.get("repair_calibration", {}).get("final_repair_estimate", deal.repairs),
+        "repair_number_explanation": repair_breakdown.get("repair_calibration", {}).get("repair_number_explanation", ""),
         "final_decision": final_summary["final_decision"],
         "team_action": final_summary["team_action"],
         "best_exit": result["best_exit"],
@@ -1354,6 +1413,65 @@ with col3:
             step=1,
             key="repair_contingency",
         )
+    st.markdown("### Repair Pricing Settings")
+    pset1, pset2 = st.columns(2)
+    with pset1:
+        st.selectbox(
+            "Pricing Mode",
+            [
+                "Budget handyman",
+                "Investor standard",
+                "Licensed contractor",
+                "Conservative high-risk",
+            ],
+            key="repair_pricing_mode",
+            help="Changes how the app calibrates the price-book estimate against contractor reality.",
+        )
+        st.selectbox(
+            "Market Labor Cost",
+            [
+                "Low-cost market",
+                "Normal market",
+                "High-cost market",
+                "Unknown",
+            ],
+            key="market_labor_cost",
+        )
+        st.number_input(
+            "Manual Repair Adjustment",
+            step=500,
+            key="manual_repair_adjustment",
+            help="Add or subtract dollars from the calculated repair estimate. Manual repair estimate below still overrides everything.",
+        )
+    with pset2:
+        st.selectbox(
+            "Repair Scope Confidence",
+            [
+                "Photos only",
+                "Walkthrough",
+                "Contractor verified",
+                "Unknown",
+            ],
+            key="repair_scope_confidence",
+        )
+        st.selectbox(
+            "Repair Cushion",
+            [
+                "0%",
+                "5%",
+                "10%",
+                "15%",
+                "20%",
+            ],
+            key="repair_cushion_percent",
+        )
+        st.toggle("Show full repair math?", key="show_full_repair_math")
+
+    if st.session_state.get("repair_scope_confidence") in ["Photos only", "Unknown"]:
+        st.warning("Repair scope confidence is limited. Add a walkthrough or contractor estimate before treating the repair number as final.")
+    elif st.session_state.get("repair_scope_confidence") == "Contractor verified":
+        st.success("Contractor verified scope selected. The app will reduce uncertainty warnings, but final offer still depends on the full deal math.")
+
     uploaded_repair_files = st.file_uploader(
         "Upload property photos or boots-on-ground walkthrough video",
         type=["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v", "avi"],
@@ -1361,7 +1479,7 @@ with col3:
         key="repair_media_files",
     )
     st.selectbox(
-        "Mold verified?",
+        "Moisture/biological growth verified?",
         [
             "No",
             "Unknown",
@@ -1370,7 +1488,7 @@ with col3:
             "Yes - seller disclosed",
         ],
         key="mold_verified",
-        help="If not verified, the app uses moisture/discoloration wording instead of calling it mold.",
+        help="If not verified, the app uses moisture/discoloration wording.",
     )
     st.caption(condition_wording_used())
     media_files_for_notes = uploaded_repair_files or []
@@ -1420,6 +1538,12 @@ with col3:
             market=st.session_state.get("repair_market", "Central IL"),
             repair_level=st.session_state.get("repair_level", "Rental Ready"),
             contingency_pct=float(st.session_state.get("repair_contingency", 12) or 0) / 100,
+            pricing_mode=st.session_state.get("repair_pricing_mode", "Investor standard"),
+            repair_scope_confidence=st.session_state.get("repair_scope_confidence", "Unknown"),
+            market_labor_cost=st.session_state.get("market_labor_cost", "Unknown"),
+            repair_cushion_percent=repair_cushion_percent_value(),
+            manual_repair_adjustment=float(st.session_state.get("manual_repair_adjustment", 0) or 0),
+            mold_verified=mold_verified_bool(),
         )
 
         st.session_state["repair_analysis"] = repair_analysis
@@ -1453,6 +1577,8 @@ with col3:
                 + ", ".join(safe_condition_text(flag) for flag in repair_analysis.get("red_flags", []))
             )
 
+        render_repair_number_explanation(repair_analysis.get("repair_calibration", {}))
+
         line_items = estimate.get("line_items", [])
 
         if line_items:
@@ -1473,7 +1599,7 @@ with col3:
         if st.button("Use likely repair number in offer", type="primary"):
             st.session_state["repairs"] = int(repair_analysis.get("recommended_repair_number", 0) or 0)
             st.session_state["repair_source"] = "AI Repair Estimate"
-            st.success("Repair number copied into Estimated repairs. Scroll down and confirm it before analyzing the deal.")
+            st.success("Calibrated repair number copied into Estimated repairs. Scroll down and confirm it before analyzing the deal.")
     st.markdown("### Manual Repair Estimate")
     st.caption("Use this when you already know the repair number. Manual repair estimate overrides the AI repair estimate.")
     st.number_input(
