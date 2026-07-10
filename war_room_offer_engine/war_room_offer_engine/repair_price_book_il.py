@@ -13,6 +13,7 @@ __all__ = [
     "estimate_scope",
     "get_level_multiplier",
     "get_market_multiplier",
+    "get_market_buy_box_max",
     "get_market_profile",
     "get_market_repair_multiplier",
     "get_market_wholesale_buyer_percent",
@@ -39,6 +40,7 @@ class MarketProfile:
     buyer_profile: str
     repair_multiplier: float
     wholesale_buyer_percent: float
+    buy_box_max: float = 0
     notes: str = ""
 
 
@@ -507,16 +509,16 @@ MARKET_PROFILES: dict[str, MarketProfile] = {
     "Northern IL Non-Chicago": MarketProfile("Illinois", "Normal investor market", 1.10, 0.70),
 
     # Virginia investor pricing
-    "Southside VA": MarketProfile("Virginia", "Rural / thin buyer market", 1.03, 0.63),
-    "Southwest VA": MarketProfile("Virginia", "Rural / thin buyer market", 1.00, 0.62),
-    "Roanoke / Lynchburg VA": MarketProfile("Virginia", "Normal investor market", 1.05, 0.68),
-    "Richmond / Petersburg VA": MarketProfile("Virginia", "Strong / liquid market", 1.12, 0.73),
-    "Hampton Roads / Tidewater VA": MarketProfile("Virginia", "Strong / liquid market", 1.15, 0.73),
-    "Shenandoah Valley VA": MarketProfile("Virginia", "Normal investor market", 1.08, 0.68),
-    "Charlottesville / Central VA": MarketProfile("Virginia", "Strong / liquid market", 1.15, 0.74),
-    "Fredericksburg / Northern Neck VA": MarketProfile("Virginia", "Strong / liquid market", 1.18, 0.74),
-    "Eastern Shore VA": MarketProfile("Virginia", "Rural / thin buyer market", 1.12, 0.63),
-    "Northern VA": MarketProfile("Virginia", "Strong / liquid market", 1.35, 0.75),
+    "Southside VA": MarketProfile("Virginia", "Rural / thin buyer market", 1.03, 0.63, buy_box_max=80000),
+    "Southwest VA": MarketProfile("Virginia", "Rural / thin buyer market", 1.00, 0.62, buy_box_max=80000),
+    "Roanoke / Lynchburg VA": MarketProfile("Virginia", "Normal investor market", 1.05, 0.68, buy_box_max=80000),
+    "Richmond / Petersburg VA": MarketProfile("Virginia", "Strong / liquid market", 1.12, 0.73, buy_box_max=80000),
+    "Hampton Roads / Tidewater VA": MarketProfile("Virginia", "Strong / liquid market", 1.15, 0.73, buy_box_max=80000),
+    "Shenandoah Valley VA": MarketProfile("Virginia", "Normal investor market", 1.08, 0.68, buy_box_max=80000),
+    "Charlottesville / Central VA": MarketProfile("Virginia", "Strong / liquid market", 1.15, 0.74, buy_box_max=80000),
+    "Fredericksburg / Northern Neck VA": MarketProfile("Virginia", "Strong / liquid market", 1.18, 0.74, buy_box_max=80000),
+    "Eastern Shore VA": MarketProfile("Virginia", "Rural / thin buyer market", 1.12, 0.63, buy_box_max=80000),
+    "Northern VA": MarketProfile("Virginia", "Strong / liquid market", 1.35, 0.75, buy_box_max=80000),
 
     # Michigan
     "Detroit Metro MI": MarketProfile("Michigan", "Strong / liquid market", 1.08, 0.73),
@@ -641,12 +643,17 @@ def get_market_profile(market: str) -> dict[str, Any]:
         "buyer_profile": profile.buyer_profile,
         "repair_multiplier": profile.repair_multiplier,
         "wholesale_buyer_percent": profile.wholesale_buyer_percent,
+        "buy_box_max": profile.buy_box_max,
         "notes": profile.notes,
     }
 
 
 def get_market_wholesale_buyer_percent(market: str) -> float:
     return get_market_profile(market).get("wholesale_buyer_percent", 0.70)
+
+
+def get_market_buy_box_max(market: str) -> float:
+    return get_market_profile(market).get("buy_box_max", 0)
 
 
 def get_market_repair_multiplier(market: str) -> float:
