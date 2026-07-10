@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import sys
@@ -16,7 +17,16 @@ for import_path in [str(APP_DIR), str(REPO_ROOT)]:
         sys.path.insert(0, import_path)
 
 try:
-    from rules import Assumptions, DealInput, analyze_deal, money
+    _rules_spec = importlib.util.spec_from_file_location("war_room_offer_engine_local_rules", APP_DIR / "rules.py")
+    if _rules_spec is None or _rules_spec.loader is None:
+        raise ImportError("Could not load local rules.py")
+    _rules_module = importlib.util.module_from_spec(_rules_spec)
+    sys.modules[_rules_spec.name] = _rules_module
+    _rules_spec.loader.exec_module(_rules_module)
+    Assumptions = _rules_module.Assumptions
+    DealInput = _rules_module.DealInput
+    analyze_deal = _rules_module.analyze_deal
+    money = _rules_module.money
 except ImportError:
     try:
         from .rules import Assumptions, DealInput, analyze_deal, money
