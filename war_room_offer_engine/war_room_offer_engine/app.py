@@ -1033,8 +1033,13 @@ assumptions = Assumptions(
     market_wholesale_buyer_percent=float(wholesale_buyer_percent_arv),
     slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
     slow_flip_first_offer_gap=float(slow_flip_first_offer_gap),
+    slow_flip_lead_search_max=float(st.session_state.get("slow_flip_lead_search_max", 0) or 0),
+    slow_flip_lead_search_source=st.session_state.get("slow_flip_lead_search_source", "Market Default"),
+    above_slow_flip_lead_search_range=bool(st.session_state.get("above_slow_flip_lead_search_range", False)),
+    inside_slow_flip_lead_search_range=bool(st.session_state.get("inside_slow_flip_lead_search_range", False)),
     slow_flip_max_buy_price=float(st.session_state.get("slow_flip_max_buy_price_used", 0) or 0),
     slow_flip_max_source=st.session_state.get("slow_flip_max_source", "Market Default"),
+    above_slow_flip_max_buy_price=bool(st.session_state.get("above_slow_flip_max_buy_price", False)),
 )
 
 st.subheader("1. Pull Property Data")
@@ -1294,9 +1299,16 @@ with col3:
     )
     slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
     slow_flip_max_buy_price, slow_flip_max_source = resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
+    current_slow_flip_price = safe_float(st.session_state.get("contract_price", 0)) or safe_float(st.session_state.get("asking_price", 0))
     st.session_state["slow_flip_lead_search_max"] = int(slow_flip_lead_search_max) if slow_flip_lead_search_max > 0 else 0
+    st.session_state["slow_flip_lead_search_source"] = "Market Default"
+    st.session_state["above_slow_flip_lead_search_range"] = bool(slow_flip_lead_search_max > 0 and current_slow_flip_price > slow_flip_lead_search_max)
+    st.session_state["inside_slow_flip_lead_search_range"] = bool(slow_flip_lead_search_max > 0 and current_slow_flip_price <= slow_flip_lead_search_max)
     st.session_state["slow_flip_max_buy_price_used"] = int(slow_flip_max_buy_price) if slow_flip_max_buy_price > 0 else 0
     st.session_state["slow_flip_max_source"] = slow_flip_max_source
+    st.session_state["above_slow_flip_max_buy_price"] = bool(
+        slow_flip_max_buy_price > 0 and current_slow_flip_price > slow_flip_max_buy_price
+    )
     if slow_flip_lead_search_max > 0:
         st.info(f"Slow Flip Lead Search Max: {money(slow_flip_lead_search_max)}")
     if slow_flip_max_buy_price > 0:
@@ -1651,8 +1663,13 @@ if analyze:
         market_wholesale_buyer_percent=float(market_default_buyer_percent),
         slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
         slow_flip_first_offer_gap=float(slow_flip_first_offer_gap),
+        slow_flip_lead_search_max=float(slow_flip_lead_search_max),
+        slow_flip_lead_search_source="Market Default",
+        above_slow_flip_lead_search_range=bool(slow_flip_lead_search_max > 0 and analysis_price > slow_flip_lead_search_max),
+        inside_slow_flip_lead_search_range=bool(slow_flip_lead_search_max > 0 and analysis_price <= slow_flip_lead_search_max),
         slow_flip_max_buy_price=float(slow_flip_max_buy_price),
         slow_flip_max_source=slow_flip_max_source,
+        above_slow_flip_max_buy_price=bool(slow_flip_max_buy_price > 0 and analysis_price > slow_flip_max_buy_price),
     )
 
     analysis_notes = "\n".join(
