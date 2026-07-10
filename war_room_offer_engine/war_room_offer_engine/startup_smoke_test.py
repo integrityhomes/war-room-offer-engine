@@ -51,6 +51,11 @@ data_sources = import_first(
     "war_room_offer_engine.data_sources",
     "war_room_offer_engine.war_room_offer_engine.data_sources",
 )
+apify_connector = import_first(
+    "apify_connector",
+    "war_room_offer_engine.apify_connector",
+    "war_room_offer_engine.war_room_offer_engine.apify_connector",
+)
 
 assumption_kwargs = {
     "min_assignment_fee": 10000,
@@ -131,8 +136,35 @@ for function_name in [
     "get_secret",
     "parse_listing_text",
     "provider_connection_status",
+    "fetch_apify_zillow_dataset",
+    "run_apify_zillow_actor",
 ]:
     check(hasattr(data_sources, function_name), f"data_sources function exists: {function_name}")
+
+fake_zillow_record = {
+    "zpid": 123456,
+    "streetAddress": "123 Main St",
+    "city": "Richmond",
+    "state": "VA",
+    "zipcode": "23220",
+    "price": "$85,000",
+    "bedrooms": 3,
+    "bathrooms": 1,
+    "livingArea": 1100,
+    "daysOnZillow": 12,
+    "homeStatus": "FOR_SALE",
+    "detailUrl": "/homedetails/123-Main-St-Richmond-VA-23220/123456_zpid/",
+    "brokerName": "Sample Brokerage",
+}
+normalized = apify_connector.normalize_zillow_record(fake_zillow_record)
+check(normalized.get("ok"), "fake Apify/Zillow record normalizes")
+check(normalized["data"]["address"].startswith("123 Main St"), "Apify/Zillow address normalization works")
+check(normalized["data"]["asking_price"] == 85000, "Apify/Zillow price normalization works")
+check(normalized["field_sources"].get("asking_price") == "price", "Apify/Zillow field source tracking works")
+missing_price = apify_connector.normalize_zillow_record({key: value for key, value in fake_zillow_record.items() if key != "price"})
+check("Missing price" in missing_price.get("errors", []), "Apify/Zillow missing price is a clear error")
+deduped = apify_connector.normalize_zillow_records([fake_zillow_record, dict(fake_zillow_record)])
+check(len(deduped.get("rows", [])) == 1 and len(deduped.get("duplicates", [])) == 1, "Apify/Zillow duplicate-address protection works")
 
 deal = rules.DealInput(
     address="123 Smoke Test Ave",
