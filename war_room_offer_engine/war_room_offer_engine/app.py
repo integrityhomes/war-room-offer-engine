@@ -10,13 +10,14 @@ from ai_writer import build_ai_summary
 from data_sources import fetch_all_sources, merge_results, get_secret
 from repair_analyzer import analyze_repairs, repair_number_for_offer
 try:
-    from repair_price_book_il import available_markets, get_market_profile, get_market_wholesale_buyer_percent
+    from repair_price_book_il import available_markets, get_market_buy_box_max, get_market_profile, get_market_wholesale_buyer_percent
 except ImportError:
     try:
-        from .repair_price_book_il import available_markets, get_market_profile, get_market_wholesale_buyer_percent
+        from .repair_price_book_il import available_markets, get_market_buy_box_max, get_market_profile, get_market_wholesale_buyer_percent
     except ImportError:
         from war_room_offer_engine.repair_price_book_il import (
             available_markets,
+            get_market_buy_box_max,
             get_market_profile,
             get_market_wholesale_buyer_percent,
         )
@@ -49,6 +50,7 @@ FIELD_DEFAULTS = {
     "manual_repair_estimate": 0,
     "manual_repair_notes": "",
     "repair_source": "Missing",
+    "manual_market_buy_box_max_override": 0,
     "notes": "",
 }
 
@@ -156,6 +158,13 @@ def market_wholesale_percent_used(
     return max(buyer_percent, 0.50), adjustments
 
 
+def resolve_market_buy_box_max(market: str) -> tuple[float, str]:
+    manual_override = safe_float(st.session_state.get("manual_market_buy_box_max_override", 0))
+    if manual_override > 0:
+        return manual_override, "Manual Override"
+    return get_market_buy_box_max(market), "Market Default"
+
+
 def update_state_from_auto_pull(data: dict) -> None:
     mapping = {
         "market": "market",
@@ -241,6 +250,9 @@ def build_extra_risk_flags(
         risks.append("Roof leak mentioned in notes")
     if deal.livable == "No":
         risks.append("Property not livable")
+    market_buy_box_max = safe_float(st.session_state.get("market_buy_box_max_used", 0))
+    if market_buy_box_max > 0 and deal.asking_price > market_buy_box_max:
+        risks.append(f"Asking/buy price is above the market buy box max of {money(market_buy_box_max)}")
 
     slow = result.get("slow_flip", {})
     if slow.get("rent_formula_max_offer_before_cap", 0) > assumptions.slow_flip_max_offer_cap:
@@ -388,6 +400,7 @@ def build_deal_log_row(
     best = result["best"]
     market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
     result_assumptions = result.get("assumptions", {})
+    market_buy_box_max, market_buy_box_source = resolve_market_buy_box_max(st.session_state.get("repair_market", "Central IL"))
     return {
         "date_time_analyzed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "address": deal.address,
@@ -403,6 +416,8 @@ def build_deal_log_row(
         "value_source": value_source,
         "manual_comps_average": manual_comps_average(),
         "market_profile": market_profile.get("buyer_profile", ""),
+        "market_buy_box_max": market_buy_box_max,
+        "market_buy_box_max_source": market_buy_box_source,
         "market_repair_multiplier": market_profile.get("repair_multiplier", 1.0),
         "market_wholesale_buyer_percent_default": result_assumptions.get(
             "market_wholesale_buyer_percent",
@@ -610,6 +625,20 @@ with col3:
         index=0,
         key="repair_market",
     )
+    st.number_input(
+        "Manual market buy box max override",
+        min_value=0,
+        step=5000,
+        key="manual_market_buy_box_max_override",
+        help="Leave at $0 to use the market default. Every Virginia market defaults to $80,000.",
+    )
+    market_buy_box_max, market_buy_box_source = resolve_market_buy_box_max(st.session_state.get("repair_market", "Central IL"))
+    st.session_state["market_buy_box_max_used"] = int(market_buy_box_max) if market_buy_box_max > 0 else 0
+    st.session_state["market_buy_box_max_source"] = market_buy_box_source
+    if market_buy_box_max > 0:
+        st.info(f"Market Buy Box Max: {money(market_buy_box_max)} ({market_buy_box_source})")
+    else:
+        st.info("Market Buy Box Max: Not set")
 
     r2, r3 = st.columns(2)
 
@@ -820,6 +849,9 @@ with col3:
     st.caption(f"Value Source: {value_source}")
 
     market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
+    market_buy_box_max, market_buy_box_source = resolve_market_buy_box_max(st.session_state.get("repair_market", "Central IL"))
+    st.session_state["market_buy_box_max_used"] = int(market_buy_box_max) if market_buy_box_max > 0 else 0
+    st.session_state["market_buy_box_max_source"] = market_buy_box_source
     market_default_buyer_percent = get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
     market_buyer_percent, market_adjustments = market_wholesale_percent_used(
         market=st.session_state.get("repair_market", "Central IL"),
@@ -835,6 +867,8 @@ with col3:
     p1.info(f"Market Profile: {market_profile.get('buyer_profile', 'Normal investor market')}")
     p2.info(f"Market Repair Multiplier: {float(market_profile.get('repair_multiplier', 1.0)):.2f}x")
     p3.info(f"Wholesale Buyer % Source: {wholesale_buyer_percent_source}")
+    if market_buy_box_max > 0:
+        st.caption(f"Market Buy Box Max: {money(market_buy_box_max)} ({market_buy_box_source})")
     st.caption(f"Market buyer % of ARV used: {percent_label(final_wholesale_buyer_percent)}")
     if not manual_wholesale_override and market_adjustments:
         st.caption(" ".join(market_adjustments))
@@ -877,6 +911,9 @@ if analyze:
     if resolved_arv <= 0:
         st.warning("ARV is missing. Add ARV or manual comps before making a final offer.")
 
+    market_buy_box_max, market_buy_box_source = resolve_market_buy_box_max(st.session_state.get("repair_market", "Central IL"))
+    st.session_state["market_buy_box_max_used"] = int(market_buy_box_max) if market_buy_box_max > 0 else 0
+    st.session_state["market_buy_box_max_source"] = market_buy_box_source
     market_default_buyer_percent = get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
     final_wholesale_buyer_percent, market_adjustments = market_wholesale_percent_used(
         market=st.session_state.get("repair_market", "Central IL"),
@@ -977,6 +1014,7 @@ if analyze:
         st.write({
         "ARV / estimated value": money(resolved_arv),
         "Value Source": value_source,
+        "Market Buy Box Max": money(market_buy_box_max) if market_buy_box_max > 0 else "Not set",
         "Repairs": money(st.session_state.get("repairs", 0)),
         "Wholesale Buyer % Source": wholesale.get("buyer_percent_source", ""),
         "Market buyer % of ARV used": percent_label(wholesale.get("buyer_percent_arv", 0)),
