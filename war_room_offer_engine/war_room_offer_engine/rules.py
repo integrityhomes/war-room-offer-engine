@@ -13,6 +13,9 @@ class Assumptions:
     target_offer_discount: float = 0.85
     wholesale_buyer_percent_arv: float = 0.70
     wholesale_buyer_percent_source: str = "Market Default"
+    wholesale_buyer_percent_range: str = ""
+    wholesale_buyer_percent_reason: str = ""
+    market_liquidity_tier: str = ""
     market_wholesale_buyer_percent: float = 0.70
     slow_flip_max_offer_cap: float = 32000
     slow_flip_first_offer_gap: float = 4000
@@ -154,8 +157,13 @@ def calc_wholesale(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
         "buyer_target": buyer_target,
         "buyer_percent_arv": a.wholesale_buyer_percent_arv,
         "buyer_percent_source": a.wholesale_buyer_percent_source,
+        "buyer_percent_range": a.wholesale_buyer_percent_range,
+        "buyer_percent_reason": a.wholesale_buyer_percent_reason,
+        "market_liquidity_tier": a.market_liquidity_tier,
+        "conservative_buyer_target": max((arv * max(a.wholesale_buyer_percent_arv - 0.03, 0.50)) - repairs, 0),
+        "aggressive_buyer_target": max((arv * min(a.wholesale_buyer_percent_arv + 0.03, 0.78)) - repairs, 0),
         "market_buyer_percent_arv": a.market_wholesale_buyer_percent,
-        "needs_human_review": arv <= 0 or repairs <= 0,
+        "needs_human_review": arv <= 0 or repairs <= 0 or a.wholesale_buyer_percent_arv < 0.55,
         "target_offer_low": target_offer_low,
         "target_offer_high": target_offer_high,
         "first_offer": first_offer,
@@ -238,8 +246,8 @@ def risk_notes(deal: DealInput, best_exit: str) -> list[str]:
         risks.append("High days on market. Use that as leverage with the agent.")
     if deal.occupancy in ["Tenant occupied", "Owner occupied"]:
         risks.append("Occupied property. Verify access, move-out plan, lease/rent amount, and seller timeline.")
-    if any(word in notes for word in ["fire", "foundation", "mold", "condemned", "tear down", "teardown"]):
-        risks.append("Major condition red flag. Human review required before offer.")
+    if any(word in notes for word in ["fire", "foundation", "mold", "moisture", "discoloration", "condemned", "tear down", "teardown"]):
+        risks.append("Major condition or moisture red flag. Human review required before offer.")
     if best_exit == "Pass":
         risks.append("Numbers do not support the current asking price. Only proceed if seller shows motivation.")
     if not risks:
@@ -318,6 +326,8 @@ def analyze_deal(deal: DealInput, assumptions: Assumptions | None = None) -> Dic
         risks.insert(0, f"Above Slow Flip Max Buy Price. Buy price is above the slow-flip max buy price of {money(slow_flip.get('slow_flip_max_buy_price', 0))}. Lean human review or pass unless rent/payment/ARV strongly supports the exception.")
     if slow_flip.get("functional_risks") and deal.exit_mode in ["Slow Flip Only", "Auto"] and best_exit != "Wholesale":
         risks.insert(0, "Slow flip functional risk: " + ", ".join(slow_flip.get("functional_risks", [])) + ". Push offer lower and require human review.")
+    if wholesale.get("buyer_percent_arv", 1) < 0.55 and deal.exit_mode in ["Wholesale Only", "Auto"]:
+        risks.insert(0, "Wholesale buyer percent is below 55%. Require human review before making this a buy decision.")
     if best.get("exit") == "Slow Flip" and deal.asking_price > best.get("max_offer", 0) > 0:
         risks.insert(0, f"Asking price is above the normal slow-flip max of {money(best.get('max_offer', 0))}. Do not chase unless there is a pre-committed buyer or Shawn/Sabrina approves the exception.")
     if best.get("exit") == "Slow Flip" and best.get("rent_formula_max_offer_before_cap", 0) > best.get("max_offer", 0):

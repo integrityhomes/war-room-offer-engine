@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime
 
 import pandas as pd
@@ -28,15 +30,15 @@ except ImportError:
             from war_room_offer_engine.war_room_offer_engine.ai_writer import build_ai_summary
 
 try:
-    from data_sources import fetch_all_sources, merge_results, get_secret
+    from data_sources import fetch_all_sources, merge_results, get_secret, parse_listing_text, provider_connection_status
 except ImportError:
     try:
-        from .data_sources import fetch_all_sources, merge_results, get_secret
+        from .data_sources import fetch_all_sources, merge_results, get_secret, parse_listing_text, provider_connection_status
     except ImportError:
         try:
-            from war_room_offer_engine.data_sources import fetch_all_sources, merge_results, get_secret
+            from war_room_offer_engine.data_sources import fetch_all_sources, merge_results, get_secret, parse_listing_text, provider_connection_status
         except ImportError:
-            from war_room_offer_engine.war_room_offer_engine.data_sources import fetch_all_sources, merge_results, get_secret
+            from war_room_offer_engine.war_room_offer_engine.data_sources import fetch_all_sources, merge_results, get_secret, parse_listing_text, provider_connection_status
 
 try:
     from repair_analyzer import analyze_repairs, repair_number_for_offer
@@ -123,6 +125,29 @@ FIELD_DEFAULTS = {
     "manual_repair_notes": "",
     "repair_source": "Missing",
     "manual_slow_flip_max_override": 0,
+    "mold_verified": "Unknown",
+    "listing_url": "",
+    "listing_text": "",
+    "data_intake_source": "Zillow manual/pasted",
+    "city": "",
+    "state": "",
+    "zip": "",
+    "lot_size": "",
+    "year_built": "",
+    "property_type": "",
+    "listing_agent_name": "",
+    "listing_agent_phone": "",
+    "listing_agent_email": "",
+    "listing_brokerage": "",
+    "tax_assessed_value": 0,
+    "last_sale_date": "",
+    "last_sale_price": 0,
+    "owner_name": "",
+    "comp_source": "",
+    "county_tax_gis_link": "",
+    "market_type": "Auto",
+    "buyer_demand_confidence": "Medium",
+    "exit_confidence": "Medium",
     "notes": "",
 }
 
@@ -137,6 +162,38 @@ def safe_float(value, default: float = 0.0) -> float:
         return float(value or default)
     except Exception:
         return default
+
+
+def mold_word_allowed() -> bool:
+    return st.session_state.get("mold_verified") in [
+        "Yes - inspector verified",
+        "Yes - seller disclosed",
+    ]
+
+
+def safe_condition_text(text: str) -> str:
+    if mold_word_allowed():
+        return str(text or "")
+    replacements = {
+        "black mold": "suspected biological growth",
+        "mold remediation": "moisture/biological growth verification allowance",
+        "visible mold": "visible discoloration",
+        "mold": "moisture staining/discoloration",
+    }
+    clean = str(text or "")
+    for old, new in replacements.items():
+        clean = re.sub(old, new, clean, flags=re.IGNORECASE)
+    return clean
+
+
+def condition_wording_used() -> str:
+    if mold_word_allowed():
+        return "Verified mold wording allowed"
+    return "Moisture staining/discoloration observed. Further verification needed."
+
+
+def format_percent_range(low: float, high: float) -> str:
+    return f"{low * 100:.0f}% to {high * 100:.0f}%"
 
 
 def comp_price_values() -> list[float]:
@@ -187,23 +244,44 @@ def percent_label(value: float) -> str:
     return f"{float(value or 0) * 100:.0f}%"
 
 
-def market_wholesale_percent_used(
+def advanced_wholesale_buyer_model(
     market: str,
     arv: float,
     repairs: float,
     notes: str,
     repair_notes: str,
-) -> tuple[float, list[str]]:
+    property_type: str = "",
+    days_on_market: int = 0,
+    buyer_demand_confidence: str = "Medium",
+    market_type: str = "Auto",
+    occupancy: str = "Unknown",
+    livable: str = "Unknown",
+    exit_confidence: str = "Medium",
+) -> dict:
     market_profile = get_market_profile(market)
-    buyer_percent = float(market_profile.get("wholesale_buyer_percent", 0.70) or 0.70)
     buyer_profile = market_profile.get("buyer_profile", "")
-    all_notes = f"{notes or ''} {repair_notes or ''}".lower()
-    adjustments = []
+    all_notes = f"{notes or ''} {repair_notes or ''} {property_type or ''}".lower()
+    reasons = []
+
+    if "strong" in buyer_profile.lower() or "very liquid" in str(market_type).lower():
+        tier, low, high = "Tier A - Very liquid investor market", 0.72, 0.78
+    elif "rural" in buyer_profile.lower() or "thin" in buyer_profile.lower() or "rural" in str(market_type).lower():
+        tier, low, high = "Tier C - Thin / rural / slower market", 0.60, 0.67
+    elif "unknown" in str(market_type).lower() or any(word in all_notes for word in ["mobile home", "manufactured home", "low ceiling", "no driveway"]):
+        tier, low, high = "Tier D - Very risky / unknown / unusual property", 0.50, 0.60
+    else:
+        tier, low, high = "Tier B - Normal investor market", 0.68, 0.72
+
+    buyer_percent = float(market_profile.get("wholesale_buyer_percent", (low + high) / 2) or (low + high) / 2)
+    buyer_percent = min(max(buyer_percent, low), high)
+    reasons.append(f"Base tier: {tier}.")
 
     major_red_flags = [
         "foundation",
         "structural",
         "mold",
+        "moisture",
+        "discoloration",
         "fire damage",
         "condemned",
         "roof leak",
@@ -214,20 +292,85 @@ def market_wholesale_percent_used(
         "galvanized",
         "termite",
         "flood zone",
+        "low ceiling",
+        "no driveway",
     ]
 
     if arv > 0 and repairs > max(40000, arv * 0.25):
-        buyer_percent -= 0.05
-        adjustments.append("Heavy repairs reduce buyer percent by 5%.")
+        buyer_percent -= 0.06
+        reasons.append("Heavy repairs subtract 6%.")
     elif any(flag in all_notes for flag in major_red_flags):
         buyer_percent -= 0.05
-        adjustments.append("Major red flags reduce buyer percent by 5%.")
+        reasons.append("Functional or condition red flags subtract 5%.")
 
-    if arv > 0 and arv < 75000 and buyer_profile != "Strong / liquid market":
-        buyer_percent = min(buyer_percent, 0.65)
-        adjustments.append("Low ARV under $75k caps buyer percent near 65% outside strong markets.")
+    if arv > 0 and arv < 75000:
+        buyer_percent -= 0.04
+        reasons.append("Very low ARV under $75k subtracts 4%.")
+    if "rural" in all_notes or "rural" in buyer_profile.lower():
+        buyer_percent -= 0.04
+        reasons.append("Rural or thinner buyer pool subtracts 4%.")
+    if safe_float(st.session_state.get("rent", 0)) >= 1200:
+        buyer_percent += 0.02
+        reasons.append("Strong rental demand adds 2%.")
+    if buyer_demand_confidence == "Strong":
+        buyer_percent += 0.03
+        reasons.append("Strong buyer demand adds 3%.")
+    elif buyer_demand_confidence == "Weak":
+        buyer_percent -= 0.03
+        reasons.append("Weak buyer demand subtracts 3%.")
+    if any(word in all_notes for word in ["functional obsolescence", "low ceiling", "low ceilings", "no driveway", "bad layout"]):
+        buyer_percent -= 0.07
+        reasons.append("Functional obsolescence subtracts 7%.")
+    if market_type == "Unknown":
+        buyer_percent -= 0.05
+        reasons.append("Unknown market subtracts 5%.")
+    if exit_confidence == "Weak":
+        buyer_percent -= 0.03
+        reasons.append("Weak data/exit confidence subtracts 3%.")
+    elif exit_confidence == "Strong":
+        buyer_percent += 0.02
+        reasons.append("Strong exit confidence adds 2%.")
+    if st.session_state.get("repair_level") == "Investor Basic" and repairs > 0 and repairs < max(20000, arv * 0.12 if arv else 20000):
+        buyer_percent += 0.03
+        reasons.append("Turnkey/light cosmetic scope adds 3%.")
+    if days_on_market >= 90:
+        buyer_percent -= 0.04
+        reasons.append("High DOM subtracts 4%.")
+    elif days_on_market >= 45:
+        buyer_percent -= 0.02
+        reasons.append("Moderate DOM subtracts 2%.")
+    if occupancy in ["Tenant occupied", "Owner occupied"] or livable == "No":
+        buyer_percent -= 0.04
+        reasons.append("Occupancy or livability risk subtracts 4%.")
 
-    return max(buyer_percent, 0.50), adjustments
+    buyer_percent = max(min(buyer_percent, 0.78), 0.50)
+    conservative_percent = max(buyer_percent - 0.03, 0.50)
+    aggressive_percent = min(buyer_percent + 0.03, 0.78)
+    conservative_target = max((arv * conservative_percent) - repairs, 0) if arv else 0
+    aggressive_target = max((arv * aggressive_percent) - repairs, 0) if arv else 0
+    recommended_max_offer = max((arv * buyer_percent) - repairs - safe_float(st.session_state.get("min_assignment_fee_snapshot", 10000)) - safe_float(st.session_state.get("close_title_buffer_snapshot", 1500)), 0) if arv else 0
+
+    return {
+        "buyer_percent": buyer_percent,
+        "range": format_percent_range(conservative_percent, aggressive_percent),
+        "tier": tier,
+        "reasons": reasons,
+        "reason_text": " ".join(reasons),
+        "conservative_buyer_target": conservative_target,
+        "aggressive_buyer_target": aggressive_target,
+        "recommended_wholesale_max_offer": recommended_max_offer,
+    }
+
+
+def market_wholesale_percent_used(
+    market: str,
+    arv: float,
+    repairs: float,
+    notes: str,
+    repair_notes: str,
+) -> tuple[float, list[str]]:
+    model = advanced_wholesale_buyer_model(market, arv, repairs, notes, repair_notes)
+    return model["buyer_percent"], model["reasons"]
 
 
 def resolve_slow_flip_max_buy_price(market: str) -> tuple[float, str]:
@@ -256,6 +399,12 @@ def update_state_from_auto_pull(data: dict) -> None:
         "rentcast_arv": "rentcast_arv",
         "sheet_arv": "sheet_arv",
         "arv_source": "value_source",
+        "listing_url": "listing_url",
+        "agent_name": "listing_agent_name",
+        "agent_phone": "listing_agent_phone",
+        "brokerage": "listing_brokerage",
+        "year_built": "year_built",
+        "property_type": "property_type",
     }
     for source_key, state_key in mapping.items():
         value = data.get(source_key)
@@ -320,8 +469,8 @@ def build_extra_risk_flags(
         risks.append("Manual override used")
     if deal.arv > 0 and deal.repairs > max(40000, deal.arv * 0.25):
         risks.append("Repairs high")
-    if "mold" in all_notes:
-        risks.append("Mold mentioned in notes")
+    if "mold" in all_notes or "discoloration" in all_notes or "moisture staining" in all_notes:
+        risks.append("Verified mold mentioned in notes" if mold_word_allowed() and "mold" in all_notes else "Moisture staining/discoloration needs verification")
     if "roof leak" in all_notes or "leak in roof" in all_notes or ("roof" in all_notes and "leak" in all_notes):
         risks.append("Roof leak mentioned in notes")
     if deal.livable == "No":
@@ -364,7 +513,7 @@ def choose_final_decision(
         return "Human Review"
     if critical_missing.intersection(missing_info):
         return "Human Review"
-    if any(flag in risk_flags for flag in ["Mold mentioned in notes", "Property not livable"]):
+    if any(flag in risk_flags for flag in ["Verified mold mentioned in notes", "Moisture staining/discoloration needs verification", "Property not livable"]):
         return "Human Review"
     if asking > 0 and max_offer > 0 and asking > max_offer:
         return "Renegotiate"
@@ -407,6 +556,220 @@ def build_decision_reason(
     )
 
 
+def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[str], risk_flags: list[str]) -> dict:
+    best = result["best"]
+    best_exit = result["best_exit"]
+    grade = result["grade"]
+    asking = safe_float(deal.asking_price)
+    first_offer = safe_float(best.get("offer_to_send", best.get("target_offer_low", 0)))
+    comfortable_max = safe_float(best.get("target_offer_high", best.get("max_offer", 0))) or safe_float(best.get("max_offer", 0))
+    hard_max = safe_float(best.get("max_offer", 0))
+    do_not_exceed = hard_max
+
+    critical_missing = {"Missing ARV", "Missing rent", "Missing repairs"}.intersection(missing_info)
+    high_repairs = deal.arv > 0 and deal.repairs > max(50000, deal.arv * 0.30)
+    functional_risks = result.get("slow_flip", {}).get("functional_risks", [])
+    wholesale_percent = safe_float(result.get("wholesale", {}).get("buyer_percent_arv", 0))
+
+    if critical_missing or best_exit == "Needs Human Review" or functional_risks or wholesale_percent < 0.55:
+        plain_answer = "Needs Human Review"
+    elif best_exit == "Wholesale":
+        plain_answer = "Wholesale Only"
+    elif best_exit == "Slow Flip":
+        plain_answer = "Slow Flip Only"
+    elif high_repairs:
+        plain_answer = "Pass Unless Seller Takes Steal Price"
+    elif grade == "Pass" or best_exit == "Pass":
+        plain_answer = "Do Not Buy"
+    elif asking > hard_max > 0:
+        plain_answer = "Renegotiate Hard"
+    elif grade in ["A", "B"]:
+        plain_answer = "Buy"
+    else:
+        plain_answer = "Renegotiate Hard"
+
+    why = []
+    if asking > hard_max > 0:
+        why.append(f"Current price is above the hard max of {money(hard_max)}.")
+    else:
+        why.append(f"Current price is inside the modeled range for {best_exit}.")
+    why.append(f"ARV/value source is {st.session_state.get('value_source', 'Missing')} at {money(deal.arv)}.")
+    why.append(f"Rent is {money(deal.rent)} and repairs are {money(deal.repairs)}.")
+    if high_repairs:
+        why.append("Repairs are high compared to the ARV, so the deal needs a larger discount.")
+    if functional_risks:
+        why.append("Functional risks limit the buyer pool: " + ", ".join(functional_risks) + ".")
+    if risk_flags:
+        why.append("Main risk flag: " + safe_condition_text(risk_flags[0]) + ".")
+    if critical_missing:
+        why.append("Missing info must be verified first: " + ", ".join(sorted(critical_missing)) + ".")
+
+    if "Missing repairs" in missing_info:
+        next_move = "Verify repairs first"
+    elif "Missing rent" in missing_info:
+        next_move = "Verify rent first"
+    elif any("termite" in str(flag).lower() or "structural" in str(flag).lower() or "moisture" in str(flag).lower() for flag in risk_flags):
+        next_move = "Get contractor/termite inspection"
+    elif plain_answer in ["Do Not Buy", "Pass Unless Seller Takes Steal Price"]:
+        next_move = "Pass"
+    elif plain_answer in ["Renegotiate Hard", "Needs Human Review"]:
+        next_move = "Lower offer"
+    elif plain_answer == "Wholesale Only" and result.get("wholesale", {}).get("buyer_percent_arv", 0) < 0.62:
+        next_move = "Build buyer list first"
+    else:
+        next_move = "Make offer"
+
+    confidence_score = 0
+    if deal.arv > 0:
+        confidence_score += 1
+    if deal.rent > 0:
+        confidence_score += 1
+    if deal.repairs > 0:
+        confidence_score += 1
+    if not risk_flags:
+        confidence_score += 1
+    confidence = "Strong" if confidence_score >= 4 else "Medium" if confidence_score >= 2 else "Weak"
+    if critical_missing or functional_risks:
+        confidence = "Weak"
+
+    one_sentence = (
+        f"{plain_answer}: pursue only around {money(first_offer)} to {money(comfortable_max)} "
+        f"and do not exceed {money(do_not_exceed)} unless the missing items and risks check out."
+    )
+
+    return {
+        "plain_answer": plain_answer,
+        "why": [safe_condition_text(item) for item in why],
+        "best_next_move": next_move,
+        "safe_offer_range": {
+            "first_offer": first_offer,
+            "comfortable_max": comfortable_max,
+            "hard_max": hard_max,
+            "do_not_exceed": do_not_exceed,
+        },
+        "confidence": confidence,
+        "one_sentence_summary": safe_condition_text(one_sentence),
+    }
+
+
+def render_simple_deal_answer(simple_answer: dict) -> None:
+    st.subheader("Simple Deal Answer")
+    with st.container(border=True):
+        answer = simple_answer["plain_answer"]
+        if answer in ["Buy", "Wholesale Only", "Slow Flip Only"]:
+            st.success(f"Plain Answer: {answer}")
+        elif answer in ["Do Not Buy", "Pass Unless Seller Takes Steal Price"]:
+            st.error(f"Plain Answer: {answer}")
+        else:
+            st.warning(f"Plain Answer: {answer}")
+
+        st.write("Why:")
+        for item in simple_answer["why"]:
+            st.write(f"- {item}")
+
+        offer_range = simple_answer["safe_offer_range"]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("First offer", money(offer_range["first_offer"]))
+        c2.metric("Comfortable max", money(offer_range["comfortable_max"]))
+        c3.metric("Hard max", money(offer_range["hard_max"]))
+        c4.metric("Do not exceed", money(offer_range["do_not_exceed"]))
+        n1, n2 = st.columns(2)
+        n1.info(f"Best Next Move: {simple_answer['best_next_move']}")
+        n2.info(f"Confidence: {simple_answer['confidence']}")
+        st.write(simple_answer["one_sentence_summary"])
+
+
+def repair_source_label() -> str:
+    manual = safe_float(st.session_state.get("manual_repair_estimate", 0))
+    ai = safe_float(st.session_state.get("recommended_repairs_from_analyzer", 0))
+    if manual > 0 and ai > 0:
+        return "Mixed"
+    if manual > 0:
+        return "Manual"
+    if ai > 0:
+        return "AI / Price book"
+    return "Missing"
+
+
+def build_repair_breakdown() -> dict:
+    analysis = st.session_state.get("repair_analysis") or {}
+    estimate = analysis.get("estimate", {})
+    line_items = []
+    for item in estimate.get("line_items", []) or []:
+        line_items.append(
+            {
+                "Category": safe_condition_text(item.get("category", "")),
+                "Issue": safe_condition_text(item.get("label", "")),
+                "Quantity/Severity": item.get("quantity", ""),
+                "Unit price or allowance": money(item.get("base_estimate", item.get("likely", 0))),
+                "Market multiplier": item.get("market_multiplier", estimate.get("market_multiplier", "")),
+                "Market Adjustment": money(item.get("market_adjustment", 0)),
+                "Risk Adjustment": money(item.get("risk_adjustment", 0)),
+                "Final Estimate": money(item.get("final_estimate", item.get("likely", 0))),
+                "Notes": safe_condition_text(item.get("notes", "")),
+            }
+        )
+
+    triggers = []
+    notes = f"{st.session_state.get('repair_notes', '')} {st.session_state.get('manual_repair_notes', '')}".lower()
+    trigger_terms = [
+        "termite", "structural", "flooring", "kitchen", "bath", "roof", "electrical",
+        "plumbing", "hvac", "full cosmetic", "paint", "drywall", "moisture", "water damage",
+        "discoloration", "mold", "crawlspace", "septic", "well", "flood",
+    ]
+    for term in trigger_terms:
+        if term in notes:
+            triggers.append(safe_condition_text(term))
+
+    total_repairs = safe_float(st.session_state.get("repairs", 0))
+    if not total_repairs:
+        total_repairs = safe_float(analysis.get("recommended_repair_number", 0))
+
+    confidence = str(analysis.get("confidence", "Low - not enough repair information"))
+    if confidence.startswith("High"):
+        confidence_label = "High"
+    elif confidence.startswith("Medium"):
+        confidence_label = "Medium"
+    else:
+        confidence_label = "Low"
+
+    explanation = "Repair estimate is based on manual input." if safe_float(st.session_state.get("manual_repair_estimate", 0)) > 0 else "Repair estimate is based on price-book items detected from notes/media."
+    if triggers:
+        explanation += " Repairs are driven by: " + ", ".join(sorted(set(triggers))) + "."
+    if total_repairs > 50000:
+        explanation += " High repair estimate warning: this number is driven by the major items listed in the breakdown."
+
+    return {
+        "total_estimated_repairs": total_repairs,
+        "repair_confidence": confidence_label,
+        "repair_source": repair_source_label(),
+        "line_items": line_items,
+        "note_triggers": sorted(set(triggers)),
+        "market_multiplier": analysis.get("market_repair_multiplier", ""),
+        "risk_allowance": estimate.get("contingency_pct", 0),
+        "repair_explanation": safe_condition_text(explanation),
+    }
+
+
+def render_repair_estimate_breakdown(breakdown: dict) -> None:
+    st.subheader("Repair Estimate Breakdown")
+    with st.container(border=True):
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Total estimated repairs", money(breakdown.get("total_estimated_repairs", 0)))
+        r2.metric("Repair confidence", breakdown.get("repair_confidence", "Low"))
+        r3.metric("Repair source", breakdown.get("repair_source", "Missing"))
+        r4.metric("Market multiplier", breakdown.get("market_multiplier", ""))
+        if safe_float(breakdown.get("total_estimated_repairs", 0)) > 50000:
+            st.warning("High repair estimate warning: this number is driven by the following major items.")
+        st.write(breakdown.get("repair_explanation", ""))
+        if breakdown.get("note_triggers"):
+            st.caption("Note triggers: " + ", ".join(breakdown["note_triggers"]))
+        if breakdown.get("line_items"):
+            st.dataframe(pd.DataFrame(breakdown["line_items"]), use_container_width=True)
+        else:
+            st.info("No price-book line items yet. Enter repair notes, upload media, or add a manual repair estimate.")
+
+
 def render_final_decision_box(
     result: dict,
     deal: DealInput,
@@ -421,7 +784,9 @@ def render_final_decision_box(
     final_decision = choose_final_decision(result, deal, missing_info, risk_flags)
     team_action = choose_team_action(final_decision, missing_info)
     decision_reason = build_decision_reason(result, deal, value_source, risk_flags)
+    simple_answer = build_simple_deal_answer(result, deal, missing_info, risk_flags)
 
+    render_simple_deal_answer(simple_answer)
     st.subheader("Final Decision")
     with st.container(border=True):
         if final_decision == "Send Offer":
@@ -469,7 +834,7 @@ def render_final_decision_box(
             st.write("Risk Flags:")
             if risk_flags:
                 for item in risk_flags:
-                    st.warning(item)
+                    st.warning(safe_condition_text(item))
             else:
                 st.success("None")
         with c3:
@@ -482,6 +847,7 @@ def render_final_decision_box(
         "missing_info": missing_info,
         "risk_flags": risk_flags,
         "team_action": team_action,
+        "simple_answer": simple_answer,
     }
 
 
@@ -496,6 +862,10 @@ def build_deal_log_row(
     best = result["best"]
     market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
     result_assumptions = result.get("assumptions", {})
+    simple_answer = final_summary.get("simple_answer", {})
+    offer_range = simple_answer.get("safe_offer_range", {})
+    repair_breakdown = build_repair_breakdown()
+    wholesale = result.get("wholesale", {})
     slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
     slow_flip_max_buy_price, slow_flip_max_source = resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
     above_slow_flip_max_buy_price = (
@@ -541,6 +911,28 @@ def build_deal_log_row(
         "risk_flags": "; ".join(final_summary["risk_flags"]),
         "notes": deal.notes,
         "suggested_message": result["suggested_message"],
+        "simple_deal_answer": simple_answer.get("plain_answer", ""),
+        "plain_english_why": " | ".join(simple_answer.get("why", [])),
+        "best_next_move": simple_answer.get("best_next_move", ""),
+        "safe_offer_range": f"{money(offer_range.get('first_offer', 0))} to {money(offer_range.get('comfortable_max', 0))}",
+        "hard_do_not_exceed_price": offer_range.get("do_not_exceed", 0),
+        "decision_confidence": simple_answer.get("confidence", ""),
+        "repair_breakdown_json": json.dumps(repair_breakdown.get("line_items", [])),
+        "repair_explanation": repair_breakdown.get("repair_explanation", ""),
+        "repair_confidence": repair_breakdown.get("repair_confidence", ""),
+        "condition_wording_used": condition_wording_used(),
+        "mold_verified": st.session_state.get("mold_verified", "Unknown"),
+        "wholesale_buyer_percent_range": wholesale.get("buyer_percent_range", ""),
+        "wholesale_buyer_percent_reason": wholesale.get("buyer_percent_reason", ""),
+        "market_liquidity_tier": wholesale.get("market_liquidity_tier", ""),
+        "data_intake_source": st.session_state.get("data_intake_source", ""),
+        "listing_url": st.session_state.get("listing_url", ""),
+        "listing_agent_name": st.session_state.get("listing_agent_name", ""),
+        "listing_agent_phone": st.session_state.get("listing_agent_phone", ""),
+        "listing_agent_email": st.session_state.get("listing_agent_email", ""),
+        "annual_taxes": st.session_state.get("taxes", 0),
+        "tax_assessed_value": st.session_state.get("tax_assessed_value", 0),
+        "days_on_market": st.session_state.get("days_on_market", 0),
     }
 
 
@@ -580,8 +972,13 @@ with st.sidebar:
         0.01,
         disabled=not manual_wholesale_override,
     )
+    st.selectbox("Market type", ["Auto", "Very liquid investor market", "Normal investor market", "Rural / thin buyer market", "Unknown"], key="market_type")
+    st.selectbox("Buyer demand confidence", ["Strong", "Medium", "Weak"], key="buyer_demand_confidence")
+    st.selectbox("Exit confidence", ["Strong", "Medium", "Weak"], key="exit_confidence")
     slow_flip_max_offer_cap = st.number_input("Normal slow flip max offer cap", min_value=0, value=32000, step=500, help="Bradley rule: 98% of slow-flip offers stay at or below this number. Use human review for exceptions.")
     slow_flip_first_offer_gap = st.number_input("Slow flip first offer below max", min_value=0, value=4000, step=500, help="Negotiation rule: do not start at max. Example: $32k max starts at $28k.")
+    st.session_state["min_assignment_fee_snapshot"] = min_assignment_fee
+    st.session_state["close_title_buffer_snapshot"] = close_title_buffer
 
     st.divider()
     st.header("Data Connections")
@@ -598,6 +995,9 @@ assumptions = Assumptions(
     target_offer_discount=float(target_offer_discount),
     wholesale_buyer_percent_arv=float(wholesale_buyer_percent_arv),
     wholesale_buyer_percent_source="Manual Override" if manual_wholesale_override else "Market Default",
+    wholesale_buyer_percent_range="",
+    wholesale_buyer_percent_reason="",
+    market_liquidity_tier="",
     market_wholesale_buyer_percent=float(wholesale_buyer_percent_arv),
     slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
     slow_flip_first_offer_gap=float(slow_flip_first_offer_gap),
@@ -622,6 +1022,129 @@ with source_col2:
         ["Zillow / Apify", "MLS / Agent", "Off-Market Seller", "Facebook", "Driving for Dollars", "Cold Text Reply", "Manual Entry", "Other"],
         key="lead_source",
     )
+
+with st.expander("Lead Data Intake", expanded=False):
+    st.caption("Manual/pasted/vendor intake only. This does not scrape Zillow, Redfin, Realtor.com, or other listing sites.")
+    intake_cols = st.columns(3)
+    with intake_cols[0]:
+        st.selectbox(
+            "Manual source selector",
+            [
+                "Zillow manual/pasted",
+                "Redfin manual/pasted",
+                "Realtor manual/pasted",
+                "XLeads",
+                "PropStream",
+                "DealMachine",
+                "RentCast",
+                "County records",
+                "MLS/manual",
+                "Other",
+            ],
+            key="data_intake_source",
+        )
+        st.text_input("Manual Listing URL", key="listing_url")
+    with intake_cols[1]:
+        lead_intake_csv = st.file_uploader("Upload lead CSV", type=["csv"], key="lead_intake_csv")
+        st.text_input("County tax/GIS manual link", key="county_tax_gis_link")
+    with intake_cols[2]:
+        for provider in provider_connection_status():
+            st.write(("Connected: " if provider["connected"] else "API not connected - ") + provider["provider"])
+
+    st.text_area("Paste Listing Text", height=130, key="listing_text")
+    if lead_intake_csv is not None:
+        try:
+            lead_df = pd.read_csv(lead_intake_csv)
+            st.dataframe(lead_df.head(5), use_container_width=True)
+            if st.button("Use first CSV row", type="secondary"):
+                first_row = lead_df.iloc[0].to_dict()
+                csv_map = {
+                    "address": ["property address", "address", "property_address"],
+                    "asking_price": ["asking/list price", "asking price", "price", "list_price"],
+                    "beds": ["beds", "bedrooms"],
+                    "baths": ["baths", "bathrooms"],
+                    "sqft": ["square footage", "sqft", "sq_ft"],
+                    "taxes": ["annual taxes", "taxes"],
+                    "days_on_market": ["days on market", "dom"],
+                    "listing_url": ["listing url", "url", "listing_url"],
+                }
+                lower_row = {str(k).strip().lower(): v for k, v in first_row.items()}
+                filled = []
+                for state_key, names in csv_map.items():
+                    for name in names:
+                        if name in lower_row and lower_row[name] not in [None, "", 0, 0.0]:
+                            st.session_state[state_key] = lower_row[name]
+                            filled.append(state_key)
+                            break
+                st.success("Filled from CSV: " + ", ".join(filled) if filled else "Needs manual entry.")
+        except Exception as e:
+            st.warning(f"Could not read CSV yet: {e}")
+
+    if st.button("Parse pasted listing text", type="secondary"):
+        parsed = parse_listing_text(st.session_state.get("listing_text", ""))
+        field_map = {
+            "address": "address",
+            "city": "city",
+            "state": "state",
+            "zip": "zip",
+            "asking_price": "asking_price",
+            "beds": "beds",
+            "baths": "baths",
+            "sqft": "sqft",
+            "lot_size": "lot_size",
+            "year_built": "year_built",
+            "property_type": "property_type",
+            "days_on_market": "days_on_market",
+            "listing_status": "status",
+            "agent_name": "listing_agent_name",
+            "agent_phone": "listing_agent_phone",
+            "agent_email": "listing_agent_email",
+            "listing_brokerage": "listing_brokerage",
+            "tax_assessed_value": "tax_assessed_value",
+            "annual_taxes": "taxes",
+            "last_sale_date": "last_sale_date",
+            "last_sale_price": "last_sale_price",
+            "owner_name": "owner_name",
+            "rent_estimate": "rent",
+            "arv_estimate": "manual_arv_override",
+            "comp_source": "comp_source",
+        }
+        updated = []
+        for parsed_key, state_key in field_map.items():
+            value = parsed.get(parsed_key)
+            if value not in [None, "", 0, 0.0]:
+                st.session_state[state_key] = value
+                updated.append(state_key)
+        if updated:
+            st.success("Parsed and filled: " + ", ".join(updated))
+        else:
+            st.info("Needs manual entry.")
+
+    lead_detail_cols = st.columns(4)
+    with lead_detail_cols[0]:
+        st.text_input("City", key="city")
+        st.text_input("State", key="state")
+        st.text_input("Zip", key="zip")
+    with lead_detail_cols[1]:
+        st.text_input("Lot size", key="lot_size")
+        st.text_input("Year built", key="year_built")
+        st.text_input("Property type", key="property_type")
+    with lead_detail_cols[2]:
+        st.text_input("Listing agent name", key="listing_agent_name")
+        st.text_input("Listing agent phone", key="listing_agent_phone")
+        st.text_input("Listing agent email", key="listing_agent_email")
+    with lead_detail_cols[3]:
+        st.text_input("Listing brokerage", key="listing_brokerage")
+        st.number_input("Tax assessed value", min_value=0, step=1000, key="tax_assessed_value")
+        st.text_input("Comp source", key="comp_source")
+
+    sale_cols = st.columns(3)
+    with sale_cols[0]:
+        st.text_input("Last sale date", key="last_sale_date")
+    with sale_cols[1]:
+        st.number_input("Last sale price", min_value=0, step=1000, key="last_sale_price")
+    with sale_cols[2]:
+        st.text_input("Owner name if available from approved source", key="owner_name")
 
 if st.session_state.get("source_mode") == "Off-Market / Manual":
     st.info("Off-market/manual mode skips the Zillow/Master Feed. Enter the seller ask manually if you have it. RentCast will still pull rent, beds, baths, sq ft, value, and facts.")
@@ -774,6 +1297,19 @@ with col3:
         accept_multiple_files=True,
         key="repair_media_files",
     )
+    st.selectbox(
+        "Mold verified?",
+        [
+            "No",
+            "Unknown",
+            "Suspected staining only",
+            "Yes - inspector verified",
+            "Yes - seller disclosed",
+        ],
+        key="mold_verified",
+        help="If not verified, the app uses moisture/discoloration wording instead of calling it mold.",
+    )
+    st.caption(condition_wording_used())
     media_files_for_notes = uploaded_repair_files or []
 
     photo_files_for_notes = [
@@ -798,7 +1334,7 @@ with col3:
                     selected_video_for_notes,
                 )
 
-            st.session_state["repair_notes"] = generated_notes
+            st.session_state["repair_notes"] = safe_condition_text(generated_notes)
             st.success("Boots-on-ground notes created. Review them below, then click Generate Repair Estimate.") 
     repair_notes = st.text_area(
         "Boots-on-ground repair notes",
@@ -851,22 +1387,23 @@ with col3:
         if repair_analysis.get("red_flags"):
             st.error(
                 "Red flags needing contractor quote: "
-                + ", ".join(repair_analysis.get("red_flags", []))
+                + ", ".join(safe_condition_text(flag) for flag in repair_analysis.get("red_flags", []))
             )
 
         line_items = estimate.get("line_items", [])
 
         if line_items:
             st.dataframe(
-                pd.DataFrame(line_items)[
-                    ["category", "label", "quantity", "unit", "low", "likely", "high", "notes"]
-                ],
+                pd.DataFrame(line_items).assign(
+                    label=lambda df: df["label"].map(safe_condition_text),
+                    notes=lambda df: df["notes"].map(safe_condition_text),
+                )[["category", "label", "quantity", "unit", "low", "likely", "high", "notes"]],
                 use_container_width=True,
             )
 
         st.text_area(
             "Repair estimate summary",
-            value=repair_analysis.get("summary", ""),
+            value=safe_condition_text(repair_analysis.get("summary", "")),
             height=260,
         )
 
@@ -964,13 +1501,22 @@ with col3:
     st.session_state["slow_flip_max_buy_price_used"] = int(slow_flip_max_buy_price) if slow_flip_max_buy_price > 0 else 0
     st.session_state["slow_flip_max_source"] = slow_flip_max_source
     market_default_buyer_percent = get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
-    market_buyer_percent, market_adjustments = market_wholesale_percent_used(
+    wholesale_model = advanced_wholesale_buyer_model(
         market=st.session_state.get("repair_market", "Central IL"),
         arv=float(st.session_state.get("arv", 0) or 0),
         repairs=float(st.session_state.get("repairs", 0) or 0),
         notes=st.session_state.get("notes", ""),
         repair_notes=st.session_state.get("repair_notes", "") + " " + st.session_state.get("manual_repair_notes", ""),
+        property_type=st.session_state.get("property_type", ""),
+        days_on_market=int(st.session_state.get("days_on_market", 0) or 0),
+        buyer_demand_confidence=st.session_state.get("buyer_demand_confidence", "Medium"),
+        market_type=st.session_state.get("market_type", "Auto"),
+        occupancy=st.session_state.get("occupancy", "Unknown"),
+        livable=st.session_state.get("livable", "Unknown"),
+        exit_confidence=st.session_state.get("exit_confidence", "Medium"),
     )
+    market_buyer_percent = wholesale_model["buyer_percent"]
+    market_adjustments = wholesale_model["reasons"]
     final_wholesale_buyer_percent = float(wholesale_buyer_percent_arv) if manual_wholesale_override else market_buyer_percent
     wholesale_buyer_percent_source = "Manual Override" if manual_wholesale_override else "Market Default"
 
@@ -986,6 +1532,13 @@ with col3:
         st.caption(f"Slow Flip Max Buy Price: {money(slow_flip_max_buy_price)} ({slow_flip_max_source})")
         st.caption(f"Above Slow Flip Max Buy Price? {'Yes' if above_slow_flip_max_buy_price else 'No'}")
     st.caption(f"Market buyer % of ARV used: {percent_label(final_wholesale_buyer_percent)}")
+    st.caption(f"Wholesale Buyer % Range: {wholesale_model['range']} | {wholesale_model['tier']}")
+    st.caption("Wholesale buyers in this market will likely need to be around "
+               f"{percent_label(final_wholesale_buyer_percent)} of ARV because {wholesale_model['reason_text']}")
+    wt1, wt2, wt3 = st.columns(3)
+    wt1.metric("Conservative buyer target", money(wholesale_model["conservative_buyer_target"]))
+    wt2.metric("Aggressive buyer target", money(wholesale_model["aggressive_buyer_target"]))
+    wt3.metric("Recommended wholesale max offer", money(wholesale_model["recommended_wholesale_max_offer"]))
     if not manual_wholesale_override and market_adjustments:
         st.caption(" ".join(market_adjustments))
 
@@ -1033,13 +1586,21 @@ if analyze:
     st.session_state["slow_flip_max_buy_price_used"] = int(slow_flip_max_buy_price) if slow_flip_max_buy_price > 0 else 0
     st.session_state["slow_flip_max_source"] = slow_flip_max_source
     market_default_buyer_percent = get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
-    final_wholesale_buyer_percent, market_adjustments = market_wholesale_percent_used(
+    wholesale_model = advanced_wholesale_buyer_model(
         market=st.session_state.get("repair_market", "Central IL"),
         arv=float(resolved_arv or 0),
         repairs=float(st.session_state.get("repairs", 0) or 0),
         notes=st.session_state.get("notes", ""),
         repair_notes=st.session_state.get("repair_notes", "") + " " + st.session_state.get("manual_repair_notes", ""),
+        property_type=st.session_state.get("property_type", ""),
+        days_on_market=int(st.session_state.get("days_on_market", 0) or 0),
+        buyer_demand_confidence=st.session_state.get("buyer_demand_confidence", "Medium"),
+        market_type=st.session_state.get("market_type", "Auto"),
+        occupancy=st.session_state.get("occupancy", "Unknown"),
+        livable=st.session_state.get("livable", "Unknown"),
+        exit_confidence=st.session_state.get("exit_confidence", "Medium"),
     )
+    final_wholesale_buyer_percent = wholesale_model["buyer_percent"]
     if manual_wholesale_override:
         final_wholesale_buyer_percent = float(wholesale_buyer_percent_arv)
     wholesale_buyer_percent_source = "Manual Override" if manual_wholesale_override else "Market Default"
@@ -1052,6 +1613,9 @@ if analyze:
         target_offer_discount=float(target_offer_discount),
         wholesale_buyer_percent_arv=float(final_wholesale_buyer_percent),
         wholesale_buyer_percent_source=wholesale_buyer_percent_source,
+        wholesale_buyer_percent_range=wholesale_model.get("range", ""),
+        wholesale_buyer_percent_reason=wholesale_model.get("reason_text", ""),
+        market_liquidity_tier=wholesale_model.get("tier", ""),
         market_wholesale_buyer_percent=float(market_default_buyer_percent),
         slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
         slow_flip_first_offer_gap=float(slow_flip_first_offer_gap),
@@ -1101,6 +1665,8 @@ if analyze:
         repair_notes=st.session_state.get("repair_notes", ""),
         assumptions=assumptions,
     )
+    repair_breakdown = build_repair_breakdown()
+    render_repair_estimate_breakdown(repair_breakdown)
     deal_log_row = build_deal_log_row(
         result=result,
         deal=deal,
@@ -1151,6 +1717,11 @@ if analyze:
         "Repairs": money(st.session_state.get("repairs", 0)),
         "Wholesale Buyer % Source": wholesale.get("buyer_percent_source", ""),
         "Market buyer % of ARV used": percent_label(wholesale.get("buyer_percent_arv", 0)),
+        "Buyer % Range": wholesale.get("buyer_percent_range", ""),
+        "Market Liquidity Tier": wholesale.get("market_liquidity_tier", ""),
+        "Buyer % Reason": wholesale.get("buyer_percent_reason", ""),
+        "Conservative buyer target": money(wholesale.get("conservative_buyer_target", 0)),
+        "Aggressive buyer target": money(wholesale.get("aggressive_buyer_target", 0)),
         "Buyer target": money(wholesale["buyer_target"]),
         "Wholesale max offer": money(wholesale["max_offer"]),
         "Wholesale estimated fee at buy price": money(wholesale["estimated_fee_at_ask"])
@@ -1158,7 +1729,7 @@ if analyze:
 
     st.subheader("Risk Notes")
     for risk in result["risks"]:
-        st.warning(risk)
+        st.warning(safe_condition_text(risk))
 
     st.subheader("Suggested Message")
     st.text_area("Copy/paste message", result["suggested_message"], height=180)
