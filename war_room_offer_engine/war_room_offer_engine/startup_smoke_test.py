@@ -275,6 +275,8 @@ with contextlib.redirect_stderr(io.StringIO()):
 check(hasattr(app, "build_simple_deal_answer"), "app simple deal answer function imports")
 check(hasattr(app, "build_repair_breakdown"), "app repair breakdown function imports")
 check(hasattr(app, "build_exit_strategy_confidence"), "app exit confidence function imports")
+check(hasattr(app, "build_dispo_test_summary"), "app dispo test summary function imports")
+check(hasattr(app, "generate_buyer_blast_messages"), "app buyer blast generator imports")
 
 
 def set_exit_inputs(
@@ -302,10 +304,62 @@ def set_exit_inputs(
     app.st.session_state["value_source"] = "Automatic Sold Comps"
 
 
+def set_dispo_inputs(
+    outreach_status="Not sent",
+    buyers_contacted=0,
+    response_level="Not sent yet",
+    feedback="",
+    target_confirmed="Pending",
+    confirmed_price=0,
+    concerns=None,
+):
+    app.st.session_state["buyer_outreach_status"] = outreach_status
+    app.st.session_state["buyers_contacted_count"] = buyers_contacted
+    app.st.session_state["buyer_response_level"] = response_level
+    app.st.session_state["best_buyer_feedback"] = feedback
+    app.st.session_state["buyer_target_price_confirmed"] = target_confirmed
+    app.st.session_state["confirmed_buyer_target_price"] = confirmed_price
+    app.st.session_state["buyer_concerns"] = concerns or []
+
+
 set_exit_inputs()
+set_dispo_inputs()
 strong_exit = app.build_exit_strategy_confidence(result, deal, missing_info=[], risk_flags=[])
 check(strong_exit["buyer_demand_score"] == "Strong", "strong buyer demand allows strong buyer demand score")
 check(strong_exit["overall_exit_confidence"] == "Strong", "strong buyer demand allows strong exit confidence")
+
+set_exit_inputs()
+set_dispo_inputs(
+    outreach_status="Buyer interest confirmed",
+    buyers_contacted=8,
+    response_level="Strong interest",
+    feedback="Buyer wants it near the modeled number.",
+    target_confirmed="Yes",
+    confirmed_price=int(result["wholesale"]["buyer_target"] + 1000),
+)
+strong_response_exit = app.build_exit_strategy_confidence(result, deal, missing_info=[], risk_flags=[])
+strong_response_dispo = app.build_dispo_test_summary(result, deal)
+check(strong_response_exit["wholesale_exit_confidence"] == "Strong", "strong buyer response increases exit confidence")
+check(strong_response_dispo["recommendation"] == "Proceed with offer", "strong buyer response supports proceed recommendation")
+
+set_exit_inputs()
+set_dispo_inputs(outreach_status="No buyer interest", buyers_contacted=6, response_level="No interest")
+no_interest_answer = app.build_simple_deal_answer(result, deal, missing_info=[], risk_flags=[])
+check(no_interest_answer["plain_answer"] in {"Do Not Buy", "Renegotiate Hard", "Needs Human Review"}, "no buyer interest downgrades decision")
+
+set_exit_inputs()
+set_dispo_inputs(
+    outreach_status="Buyers responded",
+    buyers_contacted=5,
+    response_level="Some interest",
+    target_confirmed="Yes",
+    confirmed_price=int(result["wholesale"]["buyer_target"] - 15000),
+)
+low_target_dispo = app.build_dispo_test_summary(result, deal)
+check(any("below the app buyer target" in warning for warning in low_target_dispo["warnings"]), "confirmed buyer target below app target creates warning")
+
+messages = app.generate_buyer_blast_messages(deal, result, low_target_dispo)
+check(messages["buyer_blast_text"] and messages["buyer_blast_email"], "buyer blast message generates")
 
 set_exit_inputs(buyer_demand="Unknown", buyer_proof="Unknown")
 unknown_exit = app.build_exit_strategy_confidence(result, deal, missing_info=[], risk_flags=[])
@@ -378,10 +432,15 @@ set_exit_inputs(
     buyer_proof="No buyer proof yet",
     market_type="Unknown",
 )
+set_dispo_inputs(outreach_status="Not sent", buyers_contacted=0, response_level="Not sent yet")
 cleveland_answer = app.build_simple_deal_answer(cleveland_result, cleveland_deal, missing_info=[], risk_flags=[])
 check(
     cleveland_answer["plain_answer"] in {"Pass Unless Seller Takes Steal Price", "Needs Human Review"},
     "Cleveland-style risk case becomes Pass Unless Steal Price or Needs Human Review",
+)
+check(
+    cleveland_answer["dispo_test_recommendation"] in {"Get buyer commitment first", "Lower offer", "Pass"},
+    "Cleveland-style deal with no buyer proof stays guarded by dispo recommendation",
 )
 
 app.st.session_state["value_source"] = "RentCast Estimate"

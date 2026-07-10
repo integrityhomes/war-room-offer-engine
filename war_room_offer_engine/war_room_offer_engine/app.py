@@ -320,6 +320,20 @@ FIELD_DEFAULTS = {
     "backup_exit_strategy": "",
     "buyer_outreach_needed": "Yes",
     "exit_verification_items": [],
+    "buyer_outreach_status": "Not sent",
+    "buyers_contacted_count": 0,
+    "buyer_response_level": "Not sent yet",
+    "best_buyer_feedback": "",
+    "buyer_target_price_confirmed": "Pending",
+    "confirmed_buyer_target_price": 0,
+    "buyer_concerns": [],
+    "buyer_blast_text": "",
+    "buyer_blast_email": "",
+    "slow_flip_buyer_message": "",
+    "internal_team_message": "",
+    "dispo_test_summary": "",
+    "dispo_test_recommendation": "Get buyer commitment first",
+    "dispo_exit_confidence_after_outreach": "Weak",
     "notes": "",
 }
 
@@ -815,6 +829,167 @@ EXIT_OBSTACLE_OPTIONS = [
 ]
 
 
+BUYER_CONCERN_OPTIONS = [
+    "Price too high",
+    "Repairs too high",
+    "Market too rural",
+    "ARV too low",
+    "Rent too low",
+    "No driveway / parking issue",
+    "Low ceilings / layout issue",
+    "Structural concern",
+    "Title concern",
+    "Too small",
+    "Unknown area",
+    "Other",
+]
+
+
+def build_dispo_test_summary(result: dict, deal: DealInput) -> dict:
+    best = result.get("best", {})
+    app_buyer_target = safe_float(result.get("wholesale", {}).get("buyer_target", 0)) or safe_float(best.get("buyer_target", 0))
+    confirmed_target = safe_float(st.session_state.get("confirmed_buyer_target_price", 0))
+    outreach_status = st.session_state.get("buyer_outreach_status", "Not sent")
+    buyers_contacted = int(safe_float(st.session_state.get("buyers_contacted_count", 0)))
+    response_level = st.session_state.get("buyer_response_level", "Not sent yet")
+    target_confirmed = st.session_state.get("buyer_target_price_confirmed", "Pending")
+    concerns = list(st.session_state.get("buyer_concerns", []) or [])
+    buyer_proof = st.session_state.get("buyer_proof", "Unknown")
+    market_type = st.session_state.get("market_type", "Auto")
+    warnings: list[str] = []
+
+    exit_confidence_after = st.session_state.get("overall_exit_confidence", "Weak")
+    recommendation = "Get buyer commitment first"
+
+    if outreach_status in ["Not sent", "Not applicable"] and buyer_proof in ["No buyer proof yet", "Unknown"]:
+        warnings.append("Do not rely on wholesale exit until buyer demand is confirmed.")
+    if outreach_status == "Not sent" and market_type in ["Unknown", "Rural / thin buyer market"]:
+        warnings.append("No buyer outreach has been done in a new/unproven market. Require Human Review.")
+    if response_level == "No interest" or outreach_status == "No buyer interest":
+        exit_confidence_after = "Weak"
+        recommendation = "Pass" if deal.asking_price > safe_float(best.get("max_offer", 0)) else "Renegotiate"
+        warnings.append("Buyer response shows no interest. Downgrade the deal before locking it up.")
+    elif response_level == "Weak interest":
+        exit_confidence_after = "Weak"
+        recommendation = "Lower offer"
+        warnings.append("Buyer response is weak. Lower the offer or get a real buyer commitment first.")
+    elif response_level in ["Strong interest", "Some interest"] and outreach_status in ["Buyers responded", "Buyer interest confirmed"]:
+        if target_confirmed == "Yes" and confirmed_target > 0:
+            if app_buyer_target > 0 and confirmed_target < app_buyer_target:
+                exit_confidence_after = "Medium"
+                recommendation = "Lower offer"
+                warnings.append(
+                    f"Confirmed buyer target {money(confirmed_target)} is below the app buyer target {money(app_buyer_target)}."
+                )
+            else:
+                exit_confidence_after = "Strong" if response_level == "Strong interest" else "Medium"
+                recommendation = "Proceed with offer"
+        else:
+            exit_confidence_after = "Medium"
+            recommendation = "Get buyer commitment first"
+
+    concern_warning_terms = [
+        "Repairs too high",
+        "Market too rural",
+        "Low ceilings / layout issue",
+        "No driveway / parking issue",
+        "Structural concern",
+    ]
+    matched_concerns = [concern for concern in concerns if concern in concern_warning_terms]
+    if matched_concerns:
+        warnings.append("Exit Risk warning from buyer concerns: " + ", ".join(matched_concerns) + ".")
+        if recommendation == "Proceed with offer":
+            recommendation = "Lower offer"
+
+    if target_confirmed == "No":
+        warnings.append("Buyer target price is not confirmed yet.")
+        if recommendation == "Proceed with offer":
+            recommendation = "Get buyer commitment first"
+
+    summary = (
+        f"Outreach status: {outreach_status}. Buyer response: {response_level}. "
+        f"Buyers contacted: {buyers_contacted}. Confirmed buyer target: {money(confirmed_target)}. "
+        f"Recommendation: {recommendation}."
+    )
+
+    return {
+        "outreach_status": outreach_status,
+        "buyers_contacted_count": buyers_contacted,
+        "buyer_response_level": response_level,
+        "best_buyer_feedback": safe_condition_text(st.session_state.get("best_buyer_feedback", "")),
+        "buyer_target_price_confirmed": target_confirmed,
+        "confirmed_buyer_target_price": confirmed_target,
+        "buyer_concerns": concerns,
+        "app_buyer_target": app_buyer_target,
+        "warnings": list(dict.fromkeys(safe_condition_text(warning) for warning in warnings)),
+        "exit_confidence_after_outreach": exit_confidence_after,
+        "recommendation": recommendation,
+        "summary": safe_condition_text(summary),
+    }
+
+
+def generate_buyer_blast_messages(deal: DealInput, result: dict, dispo_summary: dict | None = None) -> dict:
+    dispo_summary = dispo_summary or build_dispo_test_summary(result, deal)
+    city_market = deal.market or st.session_state.get("city", "") or "this market"
+    arv_text = money(deal.arv) if deal.arv else "unverified"
+    repairs_text = money(deal.repairs) if deal.repairs else "needs verification"
+    buyer_target = safe_float(dispo_summary.get("confirmed_buyer_target_price", 0)) or safe_float(result.get("wholesale", {}).get("buyer_target", 0))
+    notes = safe_condition_text(
+        " ".join(
+            part
+            for part in [
+                st.session_state.get("notes", ""),
+                st.session_state.get("repair_notes", ""),
+                st.session_state.get("manual_repair_notes", ""),
+                "; ".join(st.session_state.get("exit_obstacles", []) or []),
+                "; ".join(st.session_state.get("buyer_concerns", []) or []),
+            ]
+            if str(part or "").strip()
+        )
+    )
+    short_notes = notes[:260] if notes else "Buyer feedback requested before finalizing offer."
+    property_line = f"{city_market}. {deal.beds:g} bed, {deal.baths:g} bath, {int(deal.sqft or 0):,} sqft"
+
+    text = safe_condition_text(
+        f"Investor special in {property_line}. Estimated ARV around {arv_text}, repairs around {repairs_text}. "
+        f"Asking for buyer feedback before finalizing offer. Notes: {short_notes}. "
+        "Reply with your highest comfortable buy price."
+    )
+    email = safe_condition_text(
+        f"Subject: Buyer feedback needed - {deal.address or city_market}\n\n"
+        f"Team, can you review this one before we finalize an offer?\n\n"
+        f"Address/market: {deal.address or city_market}\n"
+        f"Specs: {deal.beds:g} bed / {deal.baths:g} bath / {int(deal.sqft or 0):,} sqft\n"
+        f"ARV: {arv_text}\nRepairs: {repairs_text}\n"
+        f"Current ask/buy price: {money(deal.asking_price)}\n"
+        f"Notes: {short_notes}\n\n"
+        "Please reply with whether you would buy this, your highest comfortable price, and any deal-killer concerns."
+    )
+    slow_flip = safe_condition_text(
+        f"Owner-finance buyer check in {city_market}: {deal.beds:g}/{deal.baths:g}, rent support around {money(deal.rent)}, "
+        f"ARV around {arv_text}, repair scope {repairs_text}. Any buyer appetite here, and what payment/price range feels realistic?"
+    )
+    internal = safe_condition_text(
+        f"Dispo test: {deal.address or city_market}. Best exit: {result.get('best_exit', 'Needs Human Review')}. "
+        f"App buyer target: {money(result.get('wholesale', {}).get('buyer_target', 0))}. "
+        f"Confirmed buyer target: {money(buyer_target)}. Dispo recommendation: {dispo_summary.get('recommendation', '')}."
+    )
+    return {
+        "buyer_blast_text": text,
+        "buyer_blast_email": email,
+        "slow_flip_buyer_message": slow_flip,
+        "internal_team_message": internal,
+    }
+
+
+def store_dispo_summary(dispo_summary: dict, messages: dict) -> None:
+    st.session_state["dispo_test_summary"] = dispo_summary.get("summary", "")
+    st.session_state["dispo_test_recommendation"] = dispo_summary.get("recommendation", "")
+    st.session_state["dispo_exit_confidence_after_outreach"] = dispo_summary.get("exit_confidence_after_outreach", "Weak")
+    for key, value in messages.items():
+        st.session_state[key] = value
+
+
 def build_exit_strategy_confidence(
     result: dict,
     deal: DealInput,
@@ -837,6 +1012,11 @@ def build_exit_strategy_confidence(
     obstacles = list(st.session_state.get("exit_obstacles", []) or [])
     buyer_proof = st.session_state.get("buyer_proof", "Unknown")
     market_type = st.session_state.get("market_type", "Auto")
+    outreach_status = st.session_state.get("buyer_outreach_status", "Not sent")
+    response_level = st.session_state.get("buyer_response_level", "Not sent yet")
+    target_confirmed = st.session_state.get("buyer_target_price_confirmed", "Pending")
+    confirmed_target = safe_float(st.session_state.get("confirmed_buyer_target_price", 0))
+    buyer_concerns = list(st.session_state.get("buyer_concerns", []) or [])
 
     warnings: list[str] = []
     verification_items: list[str] = []
@@ -870,6 +1050,9 @@ def build_exit_strategy_confidence(
     if buyer_proof == "No buyer proof yet" and market_type in ["Unknown", "Rural / thin buyer market"]:
         warnings.append("No buyer proof in a new/unproven market. Require Human Review.")
         verification_items.append("buyer proof")
+    if outreach_status == "Not sent" and market_type in ["Unknown", "Rural / thin buyer market"]:
+        warnings.append("No buyer outreach has been done in a new/unproven market. Require Human Review.")
+        verification_items.append("buyer outreach")
 
     wholesale_applicable = exit_mode in ["Wholesale Only", "Auto"]
     if not wholesale_applicable:
@@ -887,6 +1070,16 @@ def build_exit_strategy_confidence(
         wholesale_exit_confidence = "Weak"
         warnings.append("Wholesale Exit Risk: buyer percent of ARV is below 55%. Require Human Review.")
         verification_items.append("wholesale buyer percent")
+    if wholesale_applicable and response_level == "No interest":
+        wholesale_exit_confidence = "Weak"
+        warnings.append("Wholesale Exit Risk: buyer outreach came back with no interest.")
+    if wholesale_applicable and response_level == "Strong interest" and outreach_status in ["Buyers responded", "Buyer interest confirmed"]:
+        if target_confirmed == "Yes" and confirmed_target > 0:
+            app_target = safe_float(result.get("wholesale", {}).get("buyer_target", 0))
+            wholesale_exit_confidence = "Strong" if not app_target or confirmed_target >= app_target else "Medium"
+            buyer_demand_score = "Strong"
+        elif buyer_list in ["Strong active buyers", "Some buyers"]:
+            wholesale_exit_confidence = "Medium"
 
     slow_flip_applicable = exit_mode in ["Slow Flip Only", "Auto"]
     weak_rental = rental_demand in ["Weak rent comps", "Conflicting data", "Unknown"]
@@ -905,6 +1098,18 @@ def build_exit_strategy_confidence(
 
     if weak_rental and slow_flip_applicable:
         warnings.append("Weak or conflicting rent comps should prevent a Grade A slow-flip decision.")
+
+    concern_warning_terms = [
+        "Repairs too high",
+        "Market too rural",
+        "Low ceilings / layout issue",
+        "No driveway / parking issue",
+        "Structural concern",
+    ]
+    matched_buyer_concerns = [concern for concern in buyer_concerns if concern in concern_warning_terms]
+    if matched_buyer_concerns:
+        warnings.append("Exit Risk warning from buyer concerns: " + ", ".join(matched_buyer_concerns) + ".")
+        verification_items.append("buyer concern")
 
     if functional_risks and buyer_demand_score == "Weak":
         warnings.append("Functional risks plus weak buyer demand: Pass Unless Seller Takes Steal Price.")
@@ -1227,6 +1432,10 @@ def choose_final_decision(
         for flag in risk_flags
         for phrase in [
             "Do not treat this as a clean buy",
+            "Do not rely on wholesale exit",
+            "No buyer outreach",
+            "Buyer response shows no interest",
+            "Confirmed buyer target",
             "Three or more exit obstacles",
             "very limited",
             "Require Human Review",
@@ -1301,6 +1510,7 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         "Missing",
     ]
     exit_summary = build_exit_strategy_confidence(result, deal, missing_info, risk_flags)
+    dispo_summary = build_dispo_test_summary(result, deal)
     weak_exit = exit_summary.get("overall_exit_confidence") == "Weak"
     limited_marketability = st.session_state.get("property_marketability") == "Very limited buyer pool"
     too_many_obstacles = len(st.session_state.get("exit_obstacles", []) or []) >= 3
@@ -1326,6 +1536,10 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         plain_answer = "Needs Human Review"
     if high_repairs and weak_arv_source:
         plain_answer = "Pass Unless Seller Takes Steal Price"
+    if dispo_summary.get("buyer_response_level") == "No interest":
+        plain_answer = "Renegotiate Hard" if asking <= hard_max or not hard_max else "Do Not Buy"
+    if dispo_summary.get("recommendation") == "Pass":
+        plain_answer = "Do Not Buy"
     if functional_risks and exit_summary.get("buyer_demand_score") == "Weak":
         plain_answer = "Pass Unless Seller Takes Steal Price"
     if limited_marketability and plain_answer in ["Buy", "Wholesale Only", "Slow Flip Only", "Renegotiate Hard"]:
@@ -1348,6 +1562,8 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         why.append("Do not treat this as a clean buy. Exit confidence is weak or unverified.")
     if exit_summary.get("exit_risk_warnings"):
         why.extend(exit_summary.get("exit_risk_warnings", [])[:3])
+    if dispo_summary.get("warnings"):
+        why.extend(dispo_summary.get("warnings", [])[:3])
     if high_repairs:
         why.append("Repairs are high compared to the ARV, so the deal needs a larger discount.")
     if functional_risks:
@@ -1365,6 +1581,8 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         next_move = "Get contractor/termite inspection"
     elif exit_summary.get("buyer_outreach_needed") == "Yes":
         next_move = "Confirm buyer demand first"
+    elif dispo_summary.get("recommendation") in ["Lower offer", "Renegotiate"]:
+        next_move = "Lower offer"
     elif plain_answer in ["Do Not Buy", "Pass Unless Seller Takes Steal Price"]:
         next_move = "Pass"
     elif plain_answer in ["Renegotiate Hard", "Needs Human Review"]:
@@ -1410,6 +1628,11 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         "overall_exit_confidence": exit_summary.get("overall_exit_confidence", "Weak"),
         "exit_risk_warnings": exit_summary.get("exit_risk_warnings", []),
         "recommended_exit_strategy": exit_summary.get("recommended_exit_strategy", ""),
+        "buyer_outreach_status": dispo_summary.get("outreach_status", "Not sent"),
+        "buyer_feedback_summary": dispo_summary.get("best_buyer_feedback", ""),
+        "confirmed_buyer_price": dispo_summary.get("confirmed_buyer_target_price", 0),
+        "buyer_proof_level": st.session_state.get("buyer_proof", "Unknown"),
+        "dispo_test_recommendation": dispo_summary.get("recommendation", "Get buyer commitment first"),
     }
 
 
@@ -1447,6 +1670,14 @@ def render_simple_deal_answer(simple_answer: dict) -> None:
             for warning in simple_answer.get("exit_risk_warnings", []):
                 st.warning(safe_condition_text(warning))
         st.info(f"Recommended Exit Strategy: {simple_answer.get('recommended_exit_strategy', '')}")
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Buyer Outreach Status", simple_answer.get("buyer_outreach_status", "Not sent"))
+        b2.metric("Confirmed Buyer Price", money(simple_answer.get("confirmed_buyer_price", 0)))
+        b3.metric("Buyer Proof Level", simple_answer.get("buyer_proof_level", "Unknown"))
+        if simple_answer.get("buyer_feedback_summary"):
+            st.write("Buyer Feedback Summary:")
+            st.write(safe_condition_text(simple_answer.get("buyer_feedback_summary", "")))
+        st.info(f"Dispo Test Recommendation: {simple_answer.get('dispo_test_recommendation', 'Get buyer commitment first')}")
         st.write(simple_answer["one_sentence_summary"])
 
 
@@ -1604,6 +1835,37 @@ def render_exit_strategy_recommendation(exit_summary: dict, result: dict) -> Non
                 st.write(f"- {item}")
 
 
+def render_buyer_blast_messages(messages: dict) -> None:
+    st.subheader("Buyer Blast Message Generator")
+    with st.container(border=True):
+        st.text_area("Wholesale buyer text message", value=messages.get("buyer_blast_text", ""), height=120)
+        st.text_area("Wholesale buyer email", value=messages.get("buyer_blast_email", ""), height=220)
+        st.text_area("Slow flip / owner-finance buyer message", value=messages.get("slow_flip_buyer_message", ""), height=120)
+        st.text_area("Internal team message", value=messages.get("internal_team_message", ""), height=120)
+
+
+def render_dispo_test_summary(dispo_summary: dict) -> None:
+    st.subheader("Dispo Test Summary")
+    with st.container(border=True):
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Outreach status", dispo_summary.get("outreach_status", "Not sent"))
+        d2.metric("Buyer response level", dispo_summary.get("buyer_response_level", "Not sent yet"))
+        d3.metric("Confirmed buyer target price", money(dispo_summary.get("confirmed_buyer_target_price", 0)))
+        d4, d5 = st.columns(2)
+        d4.metric("Exit confidence after outreach", dispo_summary.get("exit_confidence_after_outreach", "Weak"))
+        d5.metric("Recommended action", dispo_summary.get("recommendation", "Get buyer commitment first"))
+        concerns = dispo_summary.get("buyer_concerns", [])
+        if concerns:
+            st.caption("Buyer concerns: " + ", ".join(concerns))
+        feedback = dispo_summary.get("best_buyer_feedback", "")
+        if feedback:
+            st.write("Best buyer feedback:")
+            st.write(feedback)
+        for warning in dispo_summary.get("warnings", []):
+            st.warning(safe_condition_text(warning))
+        st.write(dispo_summary.get("summary", ""))
+
+
 def render_final_decision_box(
     result: dict,
     deal: DealInput,
@@ -1617,7 +1879,10 @@ def render_final_decision_box(
     risk_flags = list(dict.fromkeys(result.get("risks", []) + build_extra_risk_flags(deal, result, value_source, assumptions)))
     exit_summary = build_exit_strategy_confidence(result, deal, missing_info, risk_flags)
     store_exit_confidence_summary(exit_summary)
-    risk_flags = list(dict.fromkeys(risk_flags + exit_summary.get("exit_risk_warnings", [])))
+    dispo_summary = build_dispo_test_summary(result, deal)
+    buyer_messages = generate_buyer_blast_messages(deal, result, dispo_summary)
+    store_dispo_summary(dispo_summary, buyer_messages)
+    risk_flags = list(dict.fromkeys(risk_flags + exit_summary.get("exit_risk_warnings", []) + dispo_summary.get("warnings", [])))
     final_decision = choose_final_decision(result, deal, missing_info, risk_flags)
     team_action = choose_team_action(final_decision, missing_info)
     decision_reason = build_decision_reason(result, deal, value_source, risk_flags)
@@ -1625,6 +1890,8 @@ def render_final_decision_box(
 
     render_simple_deal_answer(simple_answer)
     render_exit_strategy_recommendation(exit_summary, result)
+    render_buyer_blast_messages(buyer_messages)
+    render_dispo_test_summary(dispo_summary)
     st.subheader("Final Decision")
     with st.container(border=True):
         if final_decision == "Send Offer":
@@ -1650,6 +1917,11 @@ def render_final_decision_box(
         x1.metric("Buyer Demand Score", exit_summary.get("buyer_demand_score", "Weak"))
         x2.metric("Recommended Exit Strategy", exit_summary.get("recommended_exit_strategy", "Human Review"))
         x3.metric("Overall Exit Confidence", exit_summary.get("overall_exit_confidence", "Weak"))
+
+        o1, o2, o3 = st.columns(3)
+        o1.metric("Buyer Outreach Status", dispo_summary.get("outreach_status", "Not sent"))
+        o2.metric("Buyer Response", dispo_summary.get("buyer_response_level", "Not sent yet"))
+        o3.metric("Dispo Test Recommendation", dispo_summary.get("recommendation", "Get buyer commitment first"))
 
         slow = result.get("slow_flip", {})
         s1, s2, s3 = st.columns(3)
@@ -1697,6 +1969,8 @@ def render_final_decision_box(
         "team_action": team_action,
         "simple_answer": simple_answer,
         "exit_summary": exit_summary,
+        "dispo_summary": dispo_summary,
+        "buyer_messages": buyer_messages,
     }
 
 
@@ -1713,6 +1987,8 @@ def build_deal_log_row(
     result_assumptions = result.get("assumptions", {})
     simple_answer = final_summary.get("simple_answer", {})
     exit_summary = final_summary.get("exit_summary", {})
+    dispo_summary = final_summary.get("dispo_summary", {})
+    buyer_messages = final_summary.get("buyer_messages", {})
     offer_range = simple_answer.get("safe_offer_range", {})
     repair_breakdown = build_repair_breakdown()
     wholesale = result.get("wholesale", {})
@@ -1797,6 +2073,17 @@ def build_deal_log_row(
         "backup_exit_strategy": exit_summary.get("backup_exit_strategy", st.session_state.get("backup_exit_strategy", "")),
         "buyer_outreach_needed": exit_summary.get("buyer_outreach_needed", st.session_state.get("buyer_outreach_needed", "")),
         "exit_verification_items": "; ".join(exit_summary.get("exit_verification_items", st.session_state.get("exit_verification_items", []))),
+        "buyer_outreach_status": st.session_state.get("buyer_outreach_status", ""),
+        "buyers_contacted_count": st.session_state.get("buyers_contacted_count", 0),
+        "buyer_response_level": st.session_state.get("buyer_response_level", ""),
+        "best_buyer_feedback": st.session_state.get("best_buyer_feedback", ""),
+        "buyer_target_price_confirmed": st.session_state.get("buyer_target_price_confirmed", ""),
+        "confirmed_buyer_target_price": st.session_state.get("confirmed_buyer_target_price", 0),
+        "buyer_concerns": "; ".join(st.session_state.get("buyer_concerns", []) or []),
+        "buyer_blast_text": buyer_messages.get("buyer_blast_text", st.session_state.get("buyer_blast_text", "")),
+        "buyer_blast_email": buyer_messages.get("buyer_blast_email", st.session_state.get("buyer_blast_email", "")),
+        "dispo_test_summary": dispo_summary.get("summary", st.session_state.get("dispo_test_summary", "")),
+        "dispo_test_recommendation": dispo_summary.get("recommendation", st.session_state.get("dispo_test_recommendation", "")),
         "final_decision": final_summary["final_decision"],
         "team_action": final_summary["team_action"],
         "best_exit": result["best_exit"],
@@ -2269,6 +2556,32 @@ with st.container(border=True):
             key="buyer_proof",
         )
     st.multiselect("Exit obstacles", EXIT_OBSTACLE_OPTIONS, key="exit_obstacles")
+
+st.subheader("Buyer Outreach / Dispo Test")
+with st.container(border=True):
+    bo1, bo2, bo3 = st.columns(3)
+    with bo1:
+        st.selectbox(
+            "Outreach status",
+            ["Not sent", "Sent to buyers", "Buyers responded", "Buyer interest confirmed", "No buyer interest", "Not applicable"],
+            key="buyer_outreach_status",
+        )
+        st.number_input("Number of buyers contacted", min_value=0, step=1, key="buyers_contacted_count")
+    with bo2:
+        st.selectbox(
+            "Buyer response level",
+            ["Strong interest", "Some interest", "Weak interest", "No interest", "Not sent yet"],
+            key="buyer_response_level",
+        )
+        st.selectbox(
+            "Buyer target price confirmed?",
+            ["Yes", "No", "Pending", "Not applicable"],
+            key="buyer_target_price_confirmed",
+        )
+    with bo3:
+        st.number_input("Confirmed buyer target price", min_value=0, step=1000, key="confirmed_buyer_target_price")
+    st.text_area("Best buyer feedback", height=90, key="best_buyer_feedback")
+    st.multiselect("Buyer concerns", BUYER_CONCERN_OPTIONS, key="buyer_concerns")
 
 col1, col2, col3 = st.columns([1, 1, 1.45])
 with col1:
