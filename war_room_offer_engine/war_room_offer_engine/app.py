@@ -35,6 +35,9 @@ FIELD_DEFAULTS = {
     "manual_arv_override": 0,
     "value_source": "Missing",
     "repairs": 0,
+    "manual_repair_estimate": 0,
+    "manual_repair_notes": "",
+    "repair_source": "Missing",
     "notes": "",
 }
 
@@ -81,6 +84,17 @@ def resolve_value_source() -> tuple[float, str]:
         return sheet_arv, "Zillow/Apify Sheet"
     if comps_arv > 0:
         return comps_arv, "Manual Comps"
+    return 0.0, "Missing"
+
+
+def resolve_repair_source() -> tuple[float, str]:
+    manual_repair = safe_float(st.session_state.get("manual_repair_estimate", 0))
+    ai_repair = safe_float(st.session_state.get("recommended_repairs_from_analyzer", 0))
+
+    if manual_repair > 0:
+        return manual_repair, "Manual Repair Estimate"
+    if ai_repair > 0:
+        return ai_repair, "AI Repair Estimate"
     return 0.0, "Missing"
 
 
@@ -329,6 +343,8 @@ def build_deal_log_row(
         "value_source": value_source,
         "manual_comps_average": manual_comps_average(),
         "repairs": deal.repairs,
+        "repair_source": st.session_state.get("repair_source", "Missing"),
+        "manual_repair_notes": st.session_state.get("manual_repair_notes", ""),
         "final_decision": final_summary["final_decision"],
         "team_action": final_summary["team_action"],
         "best_exit": result["best_exit"],
@@ -651,7 +667,36 @@ with col3:
 
         if st.button("Use likely repair number in offer", type="primary"):
             st.session_state["repairs"] = int(repair_analysis.get("recommended_repair_number", 0) or 0)
+            st.session_state["repair_source"] = "AI Repair Estimate"
             st.success("Repair number copied into Estimated repairs. Scroll down and confirm it before analyzing the deal.")
+    st.markdown("### Manual Repair Estimate")
+    st.caption("Use this when you already know the repair number. Manual repair estimate overrides the AI repair estimate.")
+    st.number_input(
+        "Manual repair estimate amount",
+        min_value=0,
+        step=1000,
+        key="manual_repair_estimate",
+    )
+    st.text_area(
+        "Repair notes / scope",
+        height=100,
+        key="manual_repair_notes",
+        placeholder="Example: Roof patch, kitchen refresh, LVP, paint, trash out.",
+    )
+
+    resolved_repairs, repair_source = resolve_repair_source()
+    if resolved_repairs > 0:
+        st.session_state["repairs"] = int(resolved_repairs)
+    st.session_state["repair_source"] = repair_source
+    repair_source_options = ["AI Repair Estimate", "Manual Repair Estimate", "Missing"]
+    st.selectbox(
+        "Repair source label",
+        repair_source_options,
+        index=repair_source_options.index(repair_source),
+        disabled=True,
+    )
+    st.caption(f"Repair Source: {repair_source}")
+
     st.markdown("### Manual Comp Entry Fallback")
     st.caption("Use this when RentCast cannot find value/comps. Enter 1 to 5 sold or listed comps.")
 
