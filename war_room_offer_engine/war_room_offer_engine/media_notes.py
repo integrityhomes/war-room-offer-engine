@@ -5,7 +5,10 @@ import tempfile
 from typing import List, Any
 
 from PIL import Image
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 from openai import OpenAI
 
 try:
@@ -74,6 +77,9 @@ def _save_uploaded_video(uploaded_file: Any) -> str:
 
 
 def _extract_video_frames(video_path: str, max_frames: int = MAX_VIDEO_FRAMES) -> List[str]:
+    if cv2 is None:
+        return []
+
     cap = cv2.VideoCapture(video_path)
 
     if not cap.isOpened():
