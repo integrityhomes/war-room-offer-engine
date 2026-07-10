@@ -56,6 +56,11 @@ apify_connector = import_first(
     "war_room_offer_engine.apify_connector",
     "war_room_offer_engine.war_room_offer_engine.apify_connector",
 )
+sold_comps = import_first(
+    "sold_comps",
+    "war_room_offer_engine.sold_comps",
+    "war_room_offer_engine.war_room_offer_engine.sold_comps",
+)
 
 assumption_kwargs = {
     "min_assignment_fee": 10000,
@@ -138,6 +143,8 @@ for function_name in [
     "provider_connection_status",
     "fetch_apify_zillow_dataset",
     "run_apify_zillow_actor",
+    "get_sold_comps",
+    "sold_comps_from_apify_rows",
 ]:
     check(hasattr(data_sources, function_name), f"data_sources function exists: {function_name}")
 
@@ -165,6 +172,80 @@ missing_price = apify_connector.normalize_zillow_record({key: value for key, val
 check("Missing price" in missing_price.get("errors", []), "Apify/Zillow missing price is a clear error")
 deduped = apify_connector.normalize_zillow_records([fake_zillow_record, dict(fake_zillow_record)])
 check(len(deduped.get("rows", [])) == 1 and len(deduped.get("duplicates", [])) == 1, "Apify/Zillow duplicate-address protection works")
+
+fake_comp_rows = [
+    {
+        "address": "120 Main St",
+        "soldPrice": 150000,
+        "soldDate": "2026-05-01",
+        "bedrooms": 3,
+        "bathrooms": 1,
+        "livingArea": 1000,
+        "distanceMiles": 0.2,
+        "homeType": "Single Family",
+        "confidence": "High",
+    },
+    {
+        "address": "124 Main St",
+        "soldPrice": 152000,
+        "soldDate": "2026-04-15",
+        "bedrooms": 3,
+        "bathrooms": 1,
+        "livingArea": 1050,
+        "distanceMiles": 0.3,
+        "homeType": "Single Family",
+        "confidence": "High",
+    },
+    {
+        "address": "126 Main St",
+        "soldPrice": 148000,
+        "soldDate": "2026-03-01",
+        "bedrooms": 3,
+        "bathrooms": 1,
+        "livingArea": 980,
+        "distanceMiles": 0.4,
+        "homeType": "Single Family",
+        "confidence": "High",
+    },
+    {
+        "address": "999 Far Rd",
+        "soldPrice": "",
+        "soldDate": "",
+        "livingArea": "",
+        "distanceMiles": 8,
+        "homeType": "Mobile Home",
+    },
+]
+normalized_comps = sold_comps.normalize_sold_comps(fake_comp_rows, source="Smoke Test")
+check(normalized_comps[0]["sold_price"] == 150000, "fake sold comp normalizes price")
+subject = {"sqft": 1000, "beds": 3, "baths": 1, "property_type": "Single Family", "functional_risks": ""}
+scored_comps = sold_comps.score_sold_comps(normalized_comps, subject, "1 mile", "Last 12 months")
+check(scored_comps[0]["score"] == "Strong Comp", "strong sold comp scores correctly")
+check(scored_comps[-1]["score"] == "Bad Comp", "bad sold comp is excluded")
+auto_summary = sold_comps.calculate_arv_from_comps(scored_comps)
+check(auto_summary["recommended_arv"] > 0, "automatic sold comps calculate recommended ARV")
+manual_override_fallback = sold_comps.resolve_arv_fallback(
+    manual_override=95000,
+    manual_comp_average=90000,
+    auto_summary=auto_summary,
+    rentcast_value=120000,
+    zillow_value=125000,
+    tax_assessed_value=80000,
+)
+check(manual_override_fallback["source"] == "Manual Override" and manual_override_fallback["arv"] == 95000, "manual ARV override wins fallback")
+manual_comp_fallback = sold_comps.resolve_arv_fallback(
+    manual_override=0,
+    manual_comp_average=90000,
+    auto_summary=auto_summary,
+    rentcast_value=120000,
+    zillow_value=125000,
+    tax_assessed_value=80000,
+)
+check(manual_comp_fallback["source"] == "Manual Comps", "manual comps outrank automatic comps")
+avm_fallback = sold_comps.resolve_arv_fallback(rentcast_value=120000)
+check(avm_fallback["confidence"] == "AVM only", "AVM fallback gets human-review confidence warning")
+missing_fallback = sold_comps.resolve_arv_fallback()
+check(missing_fallback["source"] == "Missing" and missing_fallback["arv"] == 0, "missing ARV fallback does not crash")
 
 deal = rules.DealInput(
     address="123 Smoke Test Ave",
@@ -194,10 +275,16 @@ with contextlib.redirect_stderr(io.StringIO()):
 check(hasattr(app, "build_simple_deal_answer"), "app simple deal answer function imports")
 check(hasattr(app, "build_repair_breakdown"), "app repair breakdown function imports")
 
-app.st.session_state["value_source"] = "RentCast"
+app.st.session_state["value_source"] = "RentCast Estimate"
+app.st.session_state["arv_source_used"] = "RentCast Estimate"
+app.st.session_state["arv_confidence"] = "AVM only"
 with contextlib.redirect_stderr(io.StringIO()):
     simple_answer = app.build_simple_deal_answer(result, deal, missing_info=[], risk_flags=[])
-check(simple_answer.get("plain_answer") in {"Buy", "Wholesale Only", "Slow Flip Only", "Renegotiate Hard", "Needs Human Review"}, "simple deal answer works")
+check(simple_answer.get("plain_answer") == "Needs Human Review", "simple deal answer warns on weak AVM ARV")
+check(
+    any("Wholesale spread depends on weak ARV support" in reason for reason in simple_answer.get("why", [])),
+    "wholesale weak ARV warning appears",
+)
 
 app.st.session_state["repair_analysis"] = repair_analysis
 app.st.session_state["repairs"] = int(repair_analysis.get("recommended_repair_number", 0))

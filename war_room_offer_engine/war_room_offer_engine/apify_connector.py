@@ -53,6 +53,10 @@ FIELD_ALIASES: dict[str, list[str]] = {
     "listing_agent_phone": ["agentPhone", "brokerPhone", "listingAgent.phone", "attributionInfo.agentPhoneNumber"],
     "listing_brokerage": ["brokerageName", "brokerName", "attributionInfo.brokerName"],
     "listing_agent_email": ["agentEmail", "listingAgent.email", "attributionInfo.agentEmail"],
+    "sold_price": ["soldPrice", "lastSoldPrice", "lastSalePrice", "dateSold.price", "hdpData.homeInfo.lastSoldPrice"],
+    "sold_date": ["soldDate", "lastSoldDate", "lastSaleDate", "dateSold.date", "hdpData.homeInfo.dateSold"],
+    "distance_miles": ["distance", "distanceMiles"],
+    "condition": ["condition", "homeCondition"],
 }
 
 

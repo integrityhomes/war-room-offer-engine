@@ -18,6 +18,17 @@ except ImportError:
         except ImportError:
             from war_room_offer_engine.war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
 
+try:
+    from sold_comps import normalize_sold_comps, parse_comp_text
+except ImportError:
+    try:
+        from .sold_comps import normalize_sold_comps, parse_comp_text
+    except ImportError:
+        try:
+            from war_room_offer_engine.sold_comps import normalize_sold_comps, parse_comp_text
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.sold_comps import normalize_sold_comps, parse_comp_text
+
 
 def get_secret(name: str, default: str = "") -> str:
     try:
@@ -168,9 +179,11 @@ def get_tax_info(address: str) -> dict[str, Any]:
     return {"found": False, "source": "Tax Provider", "notes": "API not connected - using manual data only."}
 
 
-def get_sold_comps(address: str) -> dict[str, Any]:
-    if get_secret("RENTCAST_API_KEY", "") or get_secret("ATTOM_API_KEY", ""):
-        return {"found": False, "source": "Sold Comps Provider", "notes": "Provider interface ready. API-specific implementation pending."}
+def get_sold_comps(address: str, radius_miles: float = 1.0, limit: int = 20) -> dict[str, Any]:
+    if get_secret("RENTCAST_API_KEY", ""):
+        return lookup_rentcast_sold_comps(address, radius_miles=radius_miles, limit=limit)
+    if get_secret("ATTOM_API_KEY", ""):
+        return {"found": False, "source": "Sold Comps Provider", "notes": "Future provider interface ready. ATTOM sold comps not wired yet."}
     return {"found": False, "source": "Sold Comps Provider", "notes": "API not connected - using manual data only."}
 
 
@@ -213,6 +226,64 @@ def apify_zillow_result_from_record(record: dict[str, Any]) -> dict[str, Any]:
         "apify_warnings": normalized.get("warnings", []),
         "apify_errors": normalized.get("errors", []),
         "notes": "Imported from Apify/Zillow normalized record.",
+    }
+
+
+def sold_comps_from_apify_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    records = []
+    for row in rows or []:
+        data = row.get("data", row) if isinstance(row, dict) else {}
+        if not isinstance(data, dict):
+            continue
+        status = str(data.get("status", "") or "").lower()
+        has_sold_data = data.get("sold_price") or data.get("sold_date") or "sold" in status
+        if has_sold_data:
+            records.append(data)
+    return normalize_sold_comps(records, source="Apify/Zillow")
+
+
+def sold_comps_from_csv_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return normalize_sold_comps(rows, source="CSV")
+
+
+def sold_comps_from_pasted_text(text: str) -> list[dict[str, Any]]:
+    return parse_comp_text(text, source="Pasted text")
+
+
+def lookup_rentcast_sold_comps(address: str, radius_miles: float = 1.0, limit: int = 20) -> dict[str, Any]:
+    api_key = get_secret("RENTCAST_API_KEY", "")
+    if not api_key:
+        return {"found": False, "source": "RentCast Sold Comps", "notes": "Missing RentCast API key."}
+    headers = {"X-Api-Key": api_key}
+    try:
+        response = requests.get(
+            "https://api.rentcast.io/v1/avm/value",
+            headers=headers,
+            params={"address": address, "compCount": limit, "radius": radius_miles},
+            timeout=25,
+        )
+    except Exception as exc:
+        return {"found": False, "source": "RentCast Sold Comps", "notes": f"RentCast sold comps lookup error: {exc}"}
+
+    if response.status_code < 200 or response.status_code >= 300:
+        return {"found": False, "source": "RentCast Sold Comps", "notes": f"RentCast sold comps HTTP {response.status_code}: {response.text[:200]}"}
+    try:
+        data = response.json()
+    except Exception:
+        return {"found": False, "source": "RentCast Sold Comps", "notes": "RentCast sold comps returned non-JSON data."}
+
+    candidates = []
+    for key in ["comparables", "comps", "saleComps", "salesComparables"]:
+        value = data.get(key)
+        if isinstance(value, list):
+            candidates = value
+            break
+    comps = normalize_sold_comps(candidates, source="RentCast")
+    return {
+        "found": bool(comps),
+        "source": "RentCast Sold Comps",
+        "comps": comps,
+        "notes": f"Loaded {len(comps)} RentCast sold comp(s)." if comps else "RentCast value endpoint returned no sold comps.",
     }
 
 
