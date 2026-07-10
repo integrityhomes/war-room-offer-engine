@@ -274,6 +274,115 @@ with contextlib.redirect_stderr(io.StringIO()):
     app = import_first("app", "war_room_offer_engine.app", "war_room_offer_engine.war_room_offer_engine.app")
 check(hasattr(app, "build_simple_deal_answer"), "app simple deal answer function imports")
 check(hasattr(app, "build_repair_breakdown"), "app repair breakdown function imports")
+check(hasattr(app, "build_exit_strategy_confidence"), "app exit confidence function imports")
+
+
+def set_exit_inputs(
+    buyer_demand="Strong buyer demand",
+    buyer_list="Strong active buyers",
+    slow_flip_demand="Strong",
+    rental_demand="Strong verified rents",
+    exit_confidence="Strong",
+    marketability="Easy to sell",
+    obstacles=None,
+    buyer_proof="Buyer already interested",
+    market_type="Normal investor market",
+):
+    app.st.session_state["buyer_demand_confidence"] = buyer_demand
+    app.st.session_state["wholesale_buyer_list_strength"] = buyer_list
+    app.st.session_state["slow_flip_buyer_demand"] = slow_flip_demand
+    app.st.session_state["rental_demand_confidence"] = rental_demand
+    app.st.session_state["exit_strategy_confidence"] = exit_confidence
+    app.st.session_state["property_marketability"] = marketability
+    app.st.session_state["exit_obstacles"] = obstacles or []
+    app.st.session_state["buyer_proof"] = buyer_proof
+    app.st.session_state["market_type"] = market_type
+    app.st.session_state["arv_source_used"] = "Automatic Sold Comps"
+    app.st.session_state["arv_confidence"] = "Strong"
+    app.st.session_state["value_source"] = "Automatic Sold Comps"
+
+
+set_exit_inputs()
+strong_exit = app.build_exit_strategy_confidence(result, deal, missing_info=[], risk_flags=[])
+check(strong_exit["buyer_demand_score"] == "Strong", "strong buyer demand allows strong buyer demand score")
+check(strong_exit["overall_exit_confidence"] == "Strong", "strong buyer demand allows strong exit confidence")
+
+set_exit_inputs(buyer_demand="Unknown", buyer_proof="Unknown")
+unknown_exit = app.build_exit_strategy_confidence(result, deal, missing_info=[], risk_flags=[])
+check(unknown_exit["overall_exit_confidence"] == "Weak", "unknown buyer demand downgrades exit confidence")
+
+slow_flip_deal = rules.DealInput(
+    address="124 Smoke Test Ave",
+    market="Southside VA",
+    lead_type="Agent",
+    exit_mode="Slow Flip Only",
+    asking_price=42000,
+    rent=1000,
+    beds=3,
+    baths=1,
+    sqft=1000,
+    taxes=0,
+    status="Active",
+    occupancy="Vacant",
+    livable="Yes",
+    days_on_market=10,
+    notes="clean slow flip test",
+    arv=110000,
+    repairs=15000,
+)
+slow_flip_result = rules.analyze_deal(slow_flip_deal, assumptions)
+set_exit_inputs(rental_demand="Weak rent comps")
+weak_rent_exit = app.build_exit_strategy_confidence(slow_flip_result, slow_flip_deal, missing_info=[], risk_flags=[])
+check(weak_rent_exit["slow_flip_exit_confidence"] == "Weak", "weak rent comps downgrade slow flip confidence")
+
+set_exit_inputs(buyer_list="No buyer list yet")
+no_buyer_list_exit = app.build_exit_strategy_confidence(result, deal, missing_info=[], risk_flags=[])
+check(no_buyer_list_exit["wholesale_exit_confidence"] == "Weak", "no buyer list downgrades wholesale confidence")
+
+set_exit_inputs(marketability="Very limited buyer pool")
+very_limited_answer = app.build_simple_deal_answer(result, deal, missing_info=[], risk_flags=[])
+check(very_limited_answer["plain_answer"] == "Needs Human Review", "very limited buyer pool triggers Human Review")
+
+set_exit_inputs(obstacles=["Low ceilings", "No driveway / street parking only", "Weak rent comps"])
+obstacle_answer = app.build_simple_deal_answer(result, deal, missing_info=[], risk_flags=[])
+check(obstacle_answer["plain_answer"] == "Needs Human Review", "three exit obstacles trigger Human Review")
+
+cleveland_deal = rules.DealInput(
+    address="125 Risk Stack Ave",
+    market="Cleveland OH",
+    lead_type="Agent",
+    exit_mode="Auto",
+    asking_price=52000,
+    rent=750,
+    beds=2,
+    baths=1,
+    sqft=850,
+    taxes=0,
+    status="Active",
+    occupancy="Vacant",
+    livable="Unknown",
+    days_on_market=80,
+    notes="low ceilings, no driveway, termite concern, weak rent comps, high repairs",
+    arv=85000,
+    repairs=42000,
+)
+cleveland_result = rules.analyze_deal(cleveland_deal, assumptions)
+set_exit_inputs(
+    buyer_demand="Limited buyer demand",
+    buyer_list="Weak buyer list",
+    slow_flip_demand="Weak",
+    rental_demand="Weak rent comps",
+    exit_confidence="Weak",
+    marketability="Very limited buyer pool",
+    obstacles=["Low ceilings", "No driveway / street parking only", "Termite / structural concern", "Weak rent comps", "High repairs"],
+    buyer_proof="No buyer proof yet",
+    market_type="Unknown",
+)
+cleveland_answer = app.build_simple_deal_answer(cleveland_result, cleveland_deal, missing_info=[], risk_flags=[])
+check(
+    cleveland_answer["plain_answer"] in {"Pass Unless Seller Takes Steal Price", "Needs Human Review"},
+    "Cleveland-style risk case becomes Pass Unless Steal Price or Needs Human Review",
+)
 
 app.st.session_state["value_source"] = "RentCast Estimate"
 app.st.session_state["arv_source_used"] = "RentCast Estimate"
