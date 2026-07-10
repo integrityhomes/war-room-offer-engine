@@ -123,6 +123,186 @@ def update_state_from_auto_pull(data: dict) -> None:
     st.session_state["value_source"] = value_source
 
 
+def build_missing_info(deal: DealInput, uploaded_files, repair_notes: str) -> list[str]:
+    missing = []
+    if not str(deal.address or "").strip():
+        missing.append("Missing address")
+    if deal.arv <= 0:
+        missing.append("Missing ARV")
+    if deal.rent <= 0:
+        missing.append("Missing rent")
+    if deal.repairs <= 0 and deal.exit_mode in ["Wholesale Only", "Auto"]:
+        missing.append("Missing repairs")
+    if deal.livable == "Unknown":
+        missing.append("Missing condition")
+    if deal.occupancy == "Unknown":
+        missing.append("Missing occupancy")
+    if not uploaded_files and not str(repair_notes or "").strip():
+        missing.append("Missing photos/repair notes")
+    return missing
+
+
+def build_extra_risk_flags(
+    deal: DealInput,
+    result: dict,
+    value_source: str,
+    assumptions: Assumptions,
+) -> list[str]:
+    notes = str(deal.notes or "").lower()
+    repair_notes_text = str(st.session_state.get("repair_notes", "") or "").lower()
+    all_notes = f"{notes} {repair_notes_text}"
+    risks = []
+
+    if deal.arv <= 0:
+        risks.append("ARV missing")
+    if value_source == "Manual Comps":
+        risks.append("Manual comps used")
+    if value_source == "Manual Override":
+        risks.append("Manual override used")
+    if deal.arv > 0 and deal.repairs > max(40000, deal.arv * 0.25):
+        risks.append("Repairs high")
+    if "mold" in all_notes:
+        risks.append("Mold mentioned in notes")
+    if "roof leak" in all_notes or "leak in roof" in all_notes or ("roof" in all_notes and "leak" in all_notes):
+        risks.append("Roof leak mentioned in notes")
+    if deal.livable == "No":
+        risks.append("Property not livable")
+
+    slow = result.get("slow_flip", {})
+    if slow.get("rent_formula_max_offer_before_cap", 0) > assumptions.slow_flip_max_offer_cap:
+        risks.append("Slow flip max offer is above normal $32,000 cap")
+
+    wholesale = result.get("wholesale", {})
+    if deal.exit_mode in ["Wholesale Only", "Auto"] and wholesale.get("estimated_fee_at_ask", 0) < assumptions.min_assignment_fee:
+        risks.append("Wholesale fee below minimum")
+
+    return risks
+
+
+def choose_final_decision(
+    result: dict,
+    deal: DealInput,
+    missing_info: list[str],
+    risk_flags: list[str],
+) -> str:
+    best = result["best"]
+    grade = result["grade"]
+    best_exit = result["best_exit"]
+    max_offer = safe_float(best.get("max_offer", 0))
+    asking = safe_float(deal.asking_price)
+    critical_missing = {"Missing address", "Missing ARV", "Missing rent"}
+
+    if best_exit == "Pass" or grade == "Pass":
+        return "Pass"
+    if best_exit == "Needs Human Review" or deal.livable == "No":
+        return "Human Review"
+    if critical_missing.intersection(missing_info):
+        return "Human Review"
+    if any(flag in risk_flags for flag in ["Mold mentioned in notes", "Property not livable"]):
+        return "Human Review"
+    if asking > 0 and max_offer > 0 and asking > max_offer:
+        return "Renegotiate"
+    if grade in ["A", "B", "C"] and best.get("offer_to_send", 0) > 0:
+        return "Send Offer"
+    if max_offer > 0:
+        return "Renegotiate"
+    return "Pass"
+
+
+def choose_team_action(final_decision: str, missing_info: list[str]) -> str:
+    if final_decision == "Pass":
+        return "Pass for now"
+    if "Missing photos/repair notes" in missing_info or "Missing condition" in missing_info or "Missing occupancy" in missing_info:
+        return "Get photos / walkthrough"
+    if "Missing repairs" in missing_info:
+        return "Get repair estimate"
+    if final_decision == "Renegotiate":
+        return "Renegotiate lower"
+    if final_decision == "Send Offer":
+        return "Send first offer"
+    return "Call agent/seller now"
+
+
+def build_decision_reason(
+    result: dict,
+    deal: DealInput,
+    value_source: str,
+    risk_flags: list[str],
+) -> str:
+    best = result["best"]
+    risks = result.get("risks", [])
+    risk_summary = risk_flags[0] if risk_flags else (risks[0] if risks else "no major risk flags")
+    return (
+        f"Grade {result['grade']} with {result['best_exit']} as the best exit. "
+        f"Value source is {value_source}; ARV is {money(deal.arv)}, rent is {money(deal.rent)}, "
+        f"repairs are {money(deal.repairs)}, and buy price is {money(deal.asking_price)}. "
+        f"The current first offer is {money(best.get('offer_to_send', best.get('target_offer_low', 0)))} "
+        f"against an internal max of {money(best.get('max_offer', 0))}. Key concern: {risk_summary}."
+    )
+
+
+def render_final_decision_box(
+    result: dict,
+    deal: DealInput,
+    value_source: str,
+    uploaded_files,
+    repair_notes: str,
+    assumptions: Assumptions,
+) -> dict:
+    best = result["best"]
+    missing_info = build_missing_info(deal, uploaded_files, repair_notes)
+    risk_flags = list(dict.fromkeys(result.get("risks", []) + build_extra_risk_flags(deal, result, value_source, assumptions)))
+    final_decision = choose_final_decision(result, deal, missing_info, risk_flags)
+    team_action = choose_team_action(final_decision, missing_info)
+    decision_reason = build_decision_reason(result, deal, value_source, risk_flags)
+
+    st.subheader("Final Decision")
+    with st.container(border=True):
+        if final_decision == "Send Offer":
+            st.success("Final Decision: Send Offer")
+        elif final_decision == "Renegotiate":
+            st.warning("Final Decision: Renegotiate")
+        elif final_decision == "Pass":
+            st.error("Final Decision: Pass")
+        else:
+            st.warning("Final Decision: Human Review")
+
+        d1, d2, d3 = st.columns(3)
+        d1.metric("First Offer to Send", money(best.get("offer_to_send", best.get("target_offer_low", 0))))
+        d2.metric("Internal Max Offer", money(best.get("max_offer", 0)))
+        d3.metric("Best Exit", result["best_exit"])
+
+        st.write("Why this decision:")
+        st.write(decision_reason)
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.write("Missing Info:")
+            if missing_info:
+                for item in missing_info:
+                    st.warning(item)
+            else:
+                st.success("None")
+        with c2:
+            st.write("Risk Flags:")
+            if risk_flags:
+                for item in risk_flags:
+                    st.warning(item)
+            else:
+                st.success("None")
+        with c3:
+            st.write("Team Action:")
+            st.info(team_action)
+
+    return {
+        "final_decision": final_decision,
+        "decision_reason": decision_reason,
+        "missing_info": missing_info,
+        "risk_flags": risk_flags,
+        "team_action": team_action,
+    }
+
+
 st.title("🏠 War Room Offer Engine")
 st.caption("Universal Property Analyzer — Zillow/Sheet leads, MLS leads, off-market sellers, RentCast, and manual fallback in one place.")
 
@@ -544,6 +724,16 @@ if analyze:
     best = result["best"]
 
     st.divider()
+    final_summary = render_final_decision_box(
+        result=result,
+        deal=deal,
+        value_source=value_source,
+        uploaded_files=uploaded_repair_files,
+        repair_notes=st.session_state.get("repair_notes", ""),
+        assumptions=assumptions,
+    )
+
+    st.divider()
     st.subheader("Decision")
 
     m1, m2, m3, m4 = st.columns(4)
@@ -605,6 +795,11 @@ if analyze:
             "lead_type": st.session_state["lead_type"],
             "exit_mode": exit_mode,
             "grade": result["grade"],
+            "final_decision": final_summary["final_decision"],
+            "team_action": final_summary["team_action"],
+            "missing_info": "; ".join(final_summary["missing_info"]),
+            "risk_flags": "; ".join(final_summary["risk_flags"]),
+            "decision_reason": final_summary["decision_reason"],
             "best_exit": result["best_exit"],
             "asking_price": st.session_state["asking_price"],
             "rent": st.session_state["rent"],
