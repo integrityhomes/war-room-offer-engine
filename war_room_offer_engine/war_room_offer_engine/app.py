@@ -66,6 +66,10 @@ try:
         provider_connection_status,
         fetch_apify_zillow_dataset,
         run_apify_zillow_actor,
+        get_sold_comps,
+        sold_comps_from_apify_rows,
+        sold_comps_from_csv_rows,
+        sold_comps_from_pasted_text,
     )
 except ImportError:
     try:
@@ -77,6 +81,10 @@ except ImportError:
             provider_connection_status,
             fetch_apify_zillow_dataset,
             run_apify_zillow_actor,
+            get_sold_comps,
+            sold_comps_from_apify_rows,
+            sold_comps_from_csv_rows,
+            sold_comps_from_pasted_text,
         )
     except ImportError:
         try:
@@ -88,6 +96,10 @@ except ImportError:
                 provider_connection_status,
                 fetch_apify_zillow_dataset,
                 run_apify_zillow_actor,
+                get_sold_comps,
+                sold_comps_from_apify_rows,
+                sold_comps_from_csv_rows,
+                sold_comps_from_pasted_text,
             )
         except ImportError:
             from war_room_offer_engine.war_room_offer_engine.data_sources import (
@@ -98,6 +110,49 @@ except ImportError:
                 provider_connection_status,
                 fetch_apify_zillow_dataset,
                 run_apify_zillow_actor,
+                get_sold_comps,
+                sold_comps_from_apify_rows,
+                sold_comps_from_csv_rows,
+                sold_comps_from_pasted_text,
+            )
+
+try:
+    from sold_comps import (
+        calculate_arv_from_comps,
+        comp_summary_json,
+        normalize_sold_comps,
+        radius_to_float,
+        resolve_arv_fallback,
+        score_sold_comps,
+    )
+except ImportError:
+    try:
+        from .sold_comps import (
+            calculate_arv_from_comps,
+            comp_summary_json,
+            normalize_sold_comps,
+            radius_to_float,
+            resolve_arv_fallback,
+            score_sold_comps,
+        )
+    except ImportError:
+        try:
+            from war_room_offer_engine.sold_comps import (
+                calculate_arv_from_comps,
+                comp_summary_json,
+                normalize_sold_comps,
+                radius_to_float,
+                resolve_arv_fallback,
+                score_sold_comps,
+            )
+        except ImportError:
+            from war_room_offer_engine.war_room_offer_engine.sold_comps import (
+                calculate_arv_from_comps,
+                comp_summary_json,
+                normalize_sold_comps,
+                radius_to_float,
+                resolve_arv_fallback,
+                score_sold_comps,
             )
 
 try:
@@ -180,6 +235,28 @@ FIELD_DEFAULTS = {
     "sheet_arv": 0,
     "manual_arv_override": 0,
     "value_source": "Missing",
+    "arv_source_used": "Missing",
+    "arv_confidence": "Not enough data",
+    "arv_fallback_reason": "",
+    "arv_fallback_warnings": [],
+    "auto_comp_address": "",
+    "auto_comp_radius": "1 mile",
+    "auto_comp_date_range": "Last 12 months",
+    "auto_comp_source": "Auto",
+    "auto_comp_pasted_text": "",
+    "auto_comp_count": 0,
+    "strong_comp_count": 0,
+    "good_comp_count": 0,
+    "weak_comp_count": 0,
+    "excluded_comp_count": 0,
+    "auto_low_arv": 0,
+    "auto_conservative_arv": 0,
+    "auto_average_arv": 0,
+    "auto_high_arv": 0,
+    "auto_recommended_arv": 0,
+    "auto_comp_summary_json": "[]",
+    "excluded_comp_flags_json": "[]",
+    "use_auto_arv_over_manual_comps": False,
     "repairs": 0,
     "manual_repair_estimate": 0,
     "manual_repair_notes": "",
@@ -298,21 +375,107 @@ def manual_comps_average() -> float:
     return sum(prices) / len(prices)
 
 
+def manual_comp_records() -> list[dict]:
+    records = []
+    for idx in range(1, 6):
+        price = safe_float(st.session_state.get(f"manual_comp_{idx}_price", 0))
+        if price <= 0:
+            continue
+        records.append(
+            {
+                "comp_address": st.session_state.get(f"manual_comp_{idx}_address", ""),
+                "sold_price": price,
+                "sold_date": "",
+                "beds": st.session_state.get(f"manual_comp_{idx}_beds", 0),
+                "baths": st.session_state.get(f"manual_comp_{idx}_baths", 0),
+                "square_feet": st.session_state.get(f"manual_comp_{idx}_sqft", 0),
+                "condition": st.session_state.get(f"manual_comp_{idx}_condition", ""),
+                "notes": st.session_state.get(f"manual_comp_{idx}_notes", ""),
+                "source": "Manual Comps",
+                "confidence": "Manual",
+            }
+        )
+    return normalize_sold_comps(records, source="Manual Comps")
+
+
+def comp_subject() -> dict:
+    return {
+        "address": st.session_state.get("address", ""),
+        "beds": st.session_state.get("beds", 0),
+        "baths": st.session_state.get("baths", 0),
+        "sqft": st.session_state.get("sqft", 0),
+        "property_type": st.session_state.get("property_type", ""),
+        "functional_risks": " ".join(
+            str(st.session_state.get(key, ""))
+            for key in ["notes", "repair_notes", "manual_repair_notes"]
+        ),
+    }
+
+
+def store_auto_arv_summary(scored_comps: list[dict], summary: dict) -> None:
+    excluded_flags = []
+    for comp in scored_comps:
+        if not comp.get("include_default", False) or comp.get("score") == "Bad Comp":
+            excluded_flags.extend(comp.get("flags", []))
+    st.session_state["auto_comp_count"] = len(scored_comps)
+    st.session_state["strong_comp_count"] = int(summary.get("strong_comp_count", 0) or 0)
+    st.session_state["good_comp_count"] = int(summary.get("good_comp_count", 0) or 0)
+    st.session_state["weak_comp_count"] = int(summary.get("weak_comp_count", 0) or 0)
+    st.session_state["excluded_comp_count"] = int(summary.get("excluded_comp_count", 0) or 0)
+    st.session_state["auto_low_arv"] = int(summary.get("low_arv", 0) or 0)
+    st.session_state["auto_conservative_arv"] = int(summary.get("conservative_arv", 0) or 0)
+    st.session_state["auto_average_arv"] = int(summary.get("average_arv", 0) or 0)
+    st.session_state["auto_high_arv"] = int(summary.get("high_arv", 0) or 0)
+    st.session_state["auto_recommended_arv"] = int(summary.get("recommended_arv", 0) or 0)
+    st.session_state["auto_arv_summary"] = summary
+    st.session_state["auto_comp_summary_json"] = comp_summary_json(scored_comps)
+    st.session_state["excluded_comp_flags_json"] = json.dumps(sorted(set(excluded_flags)))
+
+
 def resolve_value_source() -> tuple[float, str]:
     rentcast_arv = safe_float(st.session_state.get("rentcast_arv", 0))
     sheet_arv = safe_float(st.session_state.get("sheet_arv", 0))
     comps_arv = manual_comps_average()
     manual_override = safe_float(st.session_state.get("manual_arv_override", 0))
+    tax_assessed_value = safe_float(st.session_state.get("tax_assessed_value", 0))
+    auto_summary = st.session_state.get("auto_arv_summary", {}) or {}
 
-    if manual_override > 0:
-        return manual_override, "Manual Override"
-    if rentcast_arv > 0:
-        return rentcast_arv, "RentCast"
-    if sheet_arv > 0:
-        return sheet_arv, "Zillow/Apify Sheet"
-    if comps_arv > 0:
-        return comps_arv, "Manual Comps"
-    return 0.0, "Missing"
+    if st.session_state.get("use_auto_arv_over_manual_comps") and manual_override <= 0:
+        preferred_auto = dict(auto_summary)
+        fallback = resolve_arv_fallback(
+            manual_override=0,
+            manual_comp_average=0,
+            auto_summary=preferred_auto,
+            rentcast_value=rentcast_arv,
+            zillow_value=sheet_arv,
+            tax_assessed_value=tax_assessed_value,
+        )
+        if fallback.get("source") == "Automatic Sold Comps":
+            fallback["warnings"] = list(fallback.get("warnings", [])) + ["Automatic sold comps manually selected over manual comp average."]
+        elif comps_arv > 0:
+            fallback = resolve_arv_fallback(
+                manual_override=0,
+                manual_comp_average=comps_arv,
+                auto_summary={},
+                rentcast_value=0,
+                zillow_value=0,
+                tax_assessed_value=0,
+            )
+    else:
+        fallback = resolve_arv_fallback(
+            manual_override=manual_override,
+            manual_comp_average=comps_arv,
+            auto_summary=auto_summary,
+            rentcast_value=rentcast_arv,
+            zillow_value=sheet_arv,
+            tax_assessed_value=tax_assessed_value,
+        )
+
+    st.session_state["arv_source_used"] = fallback.get("source", "Missing")
+    st.session_state["arv_confidence"] = fallback.get("confidence", "Not enough data")
+    st.session_state["arv_fallback_reason"] = fallback.get("reason", "")
+    st.session_state["arv_fallback_warnings"] = fallback.get("warnings", [])
+    return safe_float(fallback.get("arv", 0)), fallback.get("source", "Missing")
 
 
 def resolve_repair_source() -> tuple[float, str]:
@@ -324,6 +487,164 @@ def resolve_repair_source() -> tuple[float, str]:
     if ai_repair > 0:
         return ai_repair, "AI Repair Estimate"
     return 0.0, "Missing"
+
+
+def render_automatic_sold_comps_section() -> None:
+    st.markdown("### Automatic Sold Comps")
+    st.caption("Pull, paste, or upload sold comps. Manual ARV override still wins, and manual comps remain the default fallback before automatic comps.")
+
+    if not st.session_state.get("auto_comp_address") and st.session_state.get("address"):
+        st.session_state["auto_comp_address"] = st.session_state.get("address", "")
+
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    with c1:
+        st.text_input("Subject property address", key="auto_comp_address")
+    with c2:
+        st.selectbox("Search radius", ["0.5 mile", "1 mile", "2 miles", "5 miles"], key="auto_comp_radius")
+    with c3:
+        st.selectbox("Sold date range", ["Last 6 months", "Last 12 months", "Last 24 months"], key="auto_comp_date_range")
+    with c4:
+        st.selectbox("Comp source", ["Auto", "RentCast", "Apify/Zillow", "Manual pasted", "CSV upload", "Manual comps only"], key="auto_comp_source")
+
+    upload = st.file_uploader("Upload sold comps CSV", type=["csv"], key="auto_comp_csv_upload")
+    st.text_area(
+        "Paste sold comps",
+        height=100,
+        key="auto_comp_pasted_text",
+        placeholder="Example: 123 Oak St, sold $92,000, 3 bed, 1 bath, 1050 sqft, sold 2026-04-15, 0.4 miles",
+    )
+
+    fetch_col, use_col, clear_col = st.columns(3)
+    with fetch_col:
+        fetch_clicked = st.button("Fetch / Refresh Sold Comps", key="fetch_auto_sold_comps")
+    with use_col:
+        use_best_clicked = st.button("Use Best Automatic ARV", key="use_best_auto_arv")
+    with clear_col:
+        clear_clicked = st.button("Clear Auto Comps", key="clear_auto_sold_comps")
+
+    if clear_clicked:
+        for key in [
+            "auto_sold_comps",
+            "auto_arv_summary",
+            "auto_comp_summary_json",
+            "excluded_comp_flags_json",
+        ]:
+            st.session_state.pop(key, None)
+        st.session_state["use_auto_arv_over_manual_comps"] = False
+        store_auto_arv_summary([], calculate_arv_from_comps([]))
+        st.success("Automatic sold comps cleared.")
+
+    if fetch_clicked:
+        source_choice = st.session_state.get("auto_comp_source", "Auto")
+        comps: list[dict] = []
+        messages: list[str] = []
+        address = st.session_state.get("auto_comp_address") or st.session_state.get("address", "")
+        radius = radius_to_float(st.session_state.get("auto_comp_radius", "1 mile"))
+
+        if source_choice in ["Auto", "RentCast"]:
+            result = get_sold_comps(address, radius_miles=radius, limit=25)
+            comps.extend(result.get("comps", []) or [])
+            if result.get("notes"):
+                messages.append(result.get("notes"))
+
+        if source_choice in ["Auto", "Apify/Zillow"]:
+            apify_comps = sold_comps_from_apify_rows(st.session_state.get("apify_zillow_preview", []))
+            comps.extend(apify_comps)
+            if not apify_comps:
+                messages.append("No sold comp rows found in the current Apify/Zillow preview.")
+
+        if source_choice in ["Auto", "CSV upload"] and upload is not None:
+            try:
+                csv_rows = pd.read_csv(upload).to_dict("records")
+                comps.extend(sold_comps_from_csv_rows(csv_rows))
+            except Exception as exc:
+                messages.append(f"CSV comp import failed: {exc}")
+
+        pasted_text = st.session_state.get("auto_comp_pasted_text", "")
+        if source_choice in ["Auto", "Manual pasted"] and pasted_text.strip():
+            comps.extend(sold_comps_from_pasted_text(pasted_text))
+
+        if source_choice in ["Auto", "Manual comps only"]:
+            comps.extend(manual_comp_records())
+
+        seen = set()
+        unique_comps = []
+        for comp in comps:
+            address_key = re.sub(r"[^a-z0-9]+", " ", str(comp.get("comp_address", "")).lower()).strip()
+            if address_key and address_key in seen:
+                continue
+            if address_key:
+                seen.add(address_key)
+            unique_comps.append(comp)
+
+        scored = score_sold_comps(
+            unique_comps,
+            comp_subject(),
+            st.session_state.get("auto_comp_radius", "1 mile"),
+            st.session_state.get("auto_comp_date_range", "Last 12 months"),
+        )
+        st.session_state["auto_sold_comps"] = scored
+        summary = calculate_arv_from_comps(scored)
+        store_auto_arv_summary(scored, summary)
+        st.session_state["use_auto_arv_over_manual_comps"] = False
+        if messages:
+            st.session_state["auto_comp_messages"] = messages
+
+    scored_comps = st.session_state.get("auto_sold_comps", []) or []
+    if scored_comps:
+        st.write("Sold Comp Preview")
+        table_rows = []
+        included_keys = set()
+        for idx, comp in enumerate(scored_comps):
+            default_include = bool(comp.get("include_default", False))
+            include = st.checkbox(
+                f"Include comp {idx + 1}: {comp.get('comp_address') or 'Unknown address'}",
+                value=default_include,
+                key=f"auto_comp_include_{idx}",
+            )
+            if include:
+                included_keys.add(str(idx))
+            table_rows.append(
+                {
+                    "Address": comp.get("comp_address", ""),
+                    "Sold Price": money(comp.get("sold_price", 0)),
+                    "Sold Date": comp.get("sold_date", ""),
+                    "Beds": comp.get("beds", 0),
+                    "Baths": comp.get("baths", 0),
+                    "Sqft": comp.get("square_feet", 0),
+                    "Distance": comp.get("distance_miles", 0),
+                    "Source": comp.get("source", ""),
+                    "Score": comp.get("score", ""),
+                    "Include?": "Yes" if include else "No",
+                    "Why excluded / flags": "; ".join(comp.get("flags", [])),
+                }
+            )
+
+        summary = calculate_arv_from_comps(scored_comps, included_keys)
+        store_auto_arv_summary(scored_comps, summary)
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True)
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Recommended ARV", money(summary.get("recommended_arv", 0)))
+        m2.metric("ARV Range", f"{money(summary.get('low_arv', 0))} - {money(summary.get('high_arv', 0))}")
+        m3.metric("ARV Confidence", summary.get("arv_confidence", "Not enough data"))
+        m4.metric("Included / Total", f"{len(included_keys)} / {len(scored_comps)}")
+        st.info(summary.get("explanation", ""))
+
+        manual_avg = manual_comps_average()
+        auto_arv = safe_float(summary.get("recommended_arv", 0))
+        if manual_avg > 0 and auto_arv > 0 and abs(auto_arv - manual_avg) / manual_avg > 0.15:
+            st.warning("Manual comps and automatic sold comps differ by more than 15%. Review both before relying on the ARV.")
+
+    for message in st.session_state.get("auto_comp_messages", []):
+        st.caption(message)
+
+    if use_best_clicked:
+        if safe_float(st.session_state.get("auto_recommended_arv", 0)) > 0:
+            st.session_state["use_auto_arv_over_manual_comps"] = True
+            st.success("Automatic sold comp ARV selected. Manual ARV override still wins if entered.")
+        else:
+            st.warning("No automatic sold comp ARV is available yet.")
 
 
 def percent_label(value: float) -> str:
@@ -620,6 +941,12 @@ def build_extra_risk_flags(
         risks.append("Manual comps used")
     if value_source == "Manual Override":
         risks.append("Manual override used")
+    if value_source == "Automatic Sold Comps" and st.session_state.get("arv_confidence") == "Weak":
+        risks.append("Weak automatic sold comps used")
+    if value_source in ["Zillow/Apify AVM", "RentCast Estimate"]:
+        risks.append("AVM used only as fallback")
+    if value_source == "Tax Assessment Reference":
+        risks.append("Tax assessment used only as reference")
     if deal.arv > 0 and deal.repairs > max(40000, deal.arv * 0.25):
         risks.append("Repairs high")
     if "mold" in all_notes or "discoloration" in all_notes or "moisture staining" in all_notes:
@@ -723,8 +1050,15 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
     high_repairs = deal.arv > 0 and deal.repairs > max(50000, deal.arv * 0.30)
     functional_risks = result.get("slow_flip", {}).get("functional_risks", [])
     wholesale_percent = safe_float(result.get("wholesale", {}).get("buyer_percent_arv", 0))
+    arv_confidence = st.session_state.get("arv_confidence", "Not enough data")
+    arv_source_used = st.session_state.get("arv_source_used", st.session_state.get("value_source", "Missing"))
+    weak_arv_source = arv_confidence in ["Weak", "AVM only", "Reference only", "Not enough data"] or arv_source_used in [
+        "Zillow/Apify AVM",
+        "Tax Assessment Reference",
+        "Missing",
+    ]
 
-    if critical_missing or best_exit == "Needs Human Review" or functional_risks or wholesale_percent < 0.55:
+    if critical_missing or weak_arv_source or best_exit == "Needs Human Review" or functional_risks or wholesale_percent < 0.55:
         plain_answer = "Needs Human Review"
     elif best_exit == "Wholesale":
         plain_answer = "Wholesale Only"
@@ -741,13 +1075,22 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
     else:
         plain_answer = "Renegotiate Hard"
 
+    if plain_answer == "Buy" and weak_arv_source:
+        plain_answer = "Needs Human Review"
+    if high_repairs and weak_arv_source:
+        plain_answer = "Pass Unless Seller Takes Steal Price"
+
     why = []
     if asking > hard_max > 0:
         why.append(f"Current price is above the hard max of {money(hard_max)}.")
     else:
         why.append(f"Current price is inside the modeled range for {best_exit}.")
-    why.append(f"ARV/value source is {st.session_state.get('value_source', 'Missing')} at {money(deal.arv)}.")
+    why.append(f"ARV/value source is {arv_source_used} at {money(deal.arv)} with {arv_confidence} confidence.")
     why.append(f"Rent is {money(deal.rent)} and repairs are {money(deal.repairs)}.")
+    if weak_arv_source:
+        why.append("ARV confidence is not strong enough for a clean Buy decision.")
+    if best_exit == "Wholesale" and weak_arv_source:
+        why.append("Wholesale spread depends on weak ARV support, so verify comps before sending a firm number.")
     if high_repairs:
         why.append("Repairs are high compared to the ARV, so the deal needs a larger discount.")
     if functional_risks:
@@ -995,6 +1338,11 @@ def render_final_decision_box(
         d2.metric("Internal Max Offer", money(best.get("max_offer", 0)))
         d3.metric("Best Exit", result["best_exit"])
 
+        a1, a2, a3 = st.columns(3)
+        a1.metric("ARV Source Used", st.session_state.get("arv_source_used", value_source))
+        a2.metric("ARV Confidence", st.session_state.get("arv_confidence", "Not enough data"))
+        a3.metric("Recommended ARV", money(deal.arv))
+
         slow = result.get("slow_flip", {})
         s1, s2, s3 = st.columns(3)
         s1.metric(
@@ -1077,7 +1425,26 @@ def build_deal_log_row(
         "rent": deal.rent,
         "arv": deal.arv,
         "value_source": value_source,
+        "arv_source_used": st.session_state.get("arv_source_used", value_source),
+        "arv_confidence": st.session_state.get("arv_confidence", "Not enough data"),
+        "arv_fallback_reason": st.session_state.get("arv_fallback_reason", ""),
+        "arv_fallback_warnings": "; ".join(st.session_state.get("arv_fallback_warnings", [])),
         "manual_comps_average": manual_comps_average(),
+        "automatic_comp_count": st.session_state.get("auto_comp_count", 0),
+        "strong_comp_count": st.session_state.get("strong_comp_count", 0),
+        "good_comp_count": st.session_state.get("good_comp_count", 0),
+        "weak_comp_count": st.session_state.get("weak_comp_count", 0),
+        "excluded_comp_count": st.session_state.get("excluded_comp_count", 0),
+        "auto_low_arv": st.session_state.get("auto_low_arv", 0),
+        "auto_conservative_arv": st.session_state.get("auto_conservative_arv", 0),
+        "auto_average_arv": st.session_state.get("auto_average_arv", 0),
+        "auto_high_arv": st.session_state.get("auto_high_arv", 0),
+        "auto_recommended_arv": st.session_state.get("auto_recommended_arv", 0),
+        "auto_comp_source": st.session_state.get("auto_comp_source", ""),
+        "auto_comp_radius": st.session_state.get("auto_comp_radius", ""),
+        "auto_comp_date_range": st.session_state.get("auto_comp_date_range", ""),
+        "auto_comp_summary_json": st.session_state.get("auto_comp_summary_json", "[]"),
+        "excluded_comp_flags_json": st.session_state.get("excluded_comp_flags_json", "[]"),
         "market_profile": market_profile.get("buyer_profile", ""),
         "slow_flip_lead_search_max": slow_flip_lead_search_max,
         "slow_flip_max_buy_price": slow_flip_max_buy_price,
@@ -1820,6 +2187,8 @@ with col3:
     st.session_state["repair_source"] = repair_source
     st.info(f"Repair Source: {repair_source}")
 
+    render_automatic_sold_comps_section()
+
     st.markdown("### Manual Comp Entry Fallback")
     st.caption("Use this when RentCast cannot find value/comps. Enter 1 to 5 sold or listed comps.")
 
@@ -1881,6 +2250,12 @@ with col3:
 
     st.markdown("### Value / Wholesale Reference")
     st.caption(f"Value Source: {value_source}")
+    st.caption(f"ARV Source Used: {st.session_state.get('arv_source_used', value_source)}")
+    st.caption(f"ARV Confidence: {st.session_state.get('arv_confidence', 'Not enough data')}")
+    if st.session_state.get("arv_fallback_reason"):
+        st.caption(st.session_state.get("arv_fallback_reason"))
+    for warning in st.session_state.get("arv_fallback_warnings", []):
+        st.warning(warning)
 
     market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
     slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
