@@ -9,7 +9,17 @@ from rules import Assumptions, DealInput, analyze_deal, money
 from ai_writer import build_ai_summary
 from data_sources import fetch_all_sources, merge_results, get_secret
 from repair_analyzer import analyze_repairs, repair_number_for_offer
-from repair_price_book_il import available_markets, get_market_profile, get_market_wholesale_buyer_percent
+try:
+    from repair_price_book_il import available_markets, get_market_profile, get_market_wholesale_buyer_percent
+except ImportError:
+    try:
+        from .repair_price_book_il import available_markets, get_market_profile, get_market_wholesale_buyer_percent
+    except ImportError:
+        from war_room_offer_engine.repair_price_book_il import (
+            available_markets,
+            get_market_profile,
+            get_market_wholesale_buyer_percent,
+        )
 from media_notes import generate_boots_on_ground_notes
 st.set_page_config(page_title="War Room Offer Engine", page_icon="🏠", layout="wide")
 
