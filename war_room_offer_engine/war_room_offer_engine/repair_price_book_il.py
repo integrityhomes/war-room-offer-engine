@@ -329,12 +329,12 @@ REPAIR_PRICE_BOOK: dict[str, RepairPrice] = {
     # Red-flag allowances
     "mold_water_damage": RepairPrice(
         "Red Flag",
-        "Mold / water damage allowance",
+        "Moisture staining / discoloration allowance",
         "each",
         1500,
         5000,
         15000,
-        "Needs contractor inspection if visible mold or active water intrusion.",
+        "Moisture staining/discoloration observed. Further verification needed.",
     ),
     "foundation_structural": RepairPrice(
         "Red Flag",
@@ -420,12 +420,12 @@ REPAIR_PRICE_BOOK: dict[str, RepairPrice] = {
     ),
     "mold_remediation_allowance": RepairPrice(
         "Virginia / Red Flag",
-        "Mold remediation allowance",
+        "Moisture/biological growth verification allowance",
         "each",
         2500,
         7500,
         20000,
-        "Investor-grade allowance. Visible mold requires contractor verification.",
+        "Use as a verification allowance unless an inspector or seller has confirmed mold.",
     ),
     "crawlspace_wood_rot_repair": RepairPrice(
         "Virginia / Crawlspace",
@@ -711,9 +711,11 @@ def estimate_line_item(
     level_mult = get_level_multiplier(repair_level)
     multiplier = market_mult * level_mult
 
+    base_likely = item.likely * qty * level_mult
     low = item.low * qty * multiplier
     likely = item.likely * qty * multiplier
     high = item.high * qty * multiplier
+    market_adjustment = likely - base_likely
 
     return {
         "item_key": item_key,
@@ -721,6 +723,11 @@ def estimate_line_item(
         "label": item.label,
         "unit": item.unit,
         "quantity": qty,
+        "base_estimate": round(base_likely, 0),
+        "market_multiplier": market_mult,
+        "market_adjustment": round(market_adjustment, 0),
+        "risk_adjustment": 0,
+        "final_estimate": round(likely, 0),
         "low": round(low, 0),
         "likely": round(likely, 0),
         "high": round(high, 0),
@@ -759,6 +766,9 @@ def estimate_scope(
     contingency_low = subtotal_low * contingency_pct
     contingency_likely = subtotal_likely * contingency_pct
     contingency_high = subtotal_high * contingency_pct
+    for row in line_items:
+        row["risk_adjustment"] = round(row.get("likely", 0) * contingency_pct, 0)
+        row["final_estimate"] = round(row.get("likely", 0) + row.get("risk_adjustment", 0), 0)
 
     total_low = subtotal_low + contingency_low
     total_likely = subtotal_likely + contingency_likely

@@ -59,6 +59,125 @@ def money_to_float(value: Any) -> float:
         return 0.0
 
 
+def parse_listing_text(text: str) -> dict[str, Any]:
+    text = str(text or "")
+    compact = re.sub(r"\s+", " ", text).strip()
+
+    def find_money(patterns: list[str]) -> float:
+        for pattern in patterns:
+            match = re.search(pattern, compact, re.IGNORECASE)
+            if match:
+                return money_to_float(match.group(1))
+        return 0.0
+
+    def find_number(patterns: list[str]) -> float:
+        for pattern in patterns:
+            match = re.search(pattern, compact, re.IGNORECASE)
+            if match:
+                return money_to_float(match.group(1))
+        return 0.0
+
+    parsed = {
+        "address": "",
+        "city": "",
+        "state": "",
+        "zip": "",
+        "asking_price": find_money([r"(?:price|list price|asking)[:\s$]+([\d,]+)", r"\$([\d,]{4,})"]),
+        "beds": find_number([r"(\d+(?:\.\d+)?)\s*(?:beds?|bedrooms?)"]),
+        "baths": find_number([r"(\d+(?:\.\d+)?)\s*(?:baths?|bathrooms?)"]),
+        "sqft": find_number([r"([\d,]+)\s*(?:sq\.?\s*ft|square feet|sqft)"]),
+        "lot_size": "",
+        "year_built": "",
+        "property_type": "",
+        "days_on_market": find_number([r"(\d+)\s*(?:days on market|dom)"]),
+        "listing_status": "",
+        "agent_name": "",
+        "agent_phone": "",
+        "agent_email": "",
+        "listing_brokerage": "",
+        "tax_assessed_value": find_money([r"(?:assessed value|tax assessed value)[:\s$]+([\d,]+)"]),
+        "annual_taxes": find_money([r"(?:annual taxes|taxes)[:\s$]+([\d,]+)"]),
+        "last_sale_date": "",
+        "last_sale_price": find_money([r"(?:last sale price|sold for)[:\s$]+([\d,]+)"]),
+        "owner_name": "",
+        "rent_estimate": find_money([r"(?:rent estimate|estimated rent|rent)[:\s$]+([\d,]+)"]),
+        "arv_estimate": find_money([r"(?:arv|value estimate|estimated value)[:\s$]+([\d,]+)"]),
+        "comp_source": "",
+    }
+
+    address_match = re.search(
+        r"(\d{1,6}\s+[A-Za-z0-9 .'-]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Court|Ct|Boulevard|Blvd|Place|Pl))",
+        compact,
+        re.IGNORECASE,
+    )
+    if address_match:
+        parsed["address"] = address_match.group(1).strip()
+
+    email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", compact)
+    if email_match:
+        parsed["agent_email"] = email_match.group(0)
+
+    phone_match = re.search(r"(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}", compact)
+    if phone_match:
+        parsed["agent_phone"] = phone_match.group(0)
+
+    year_match = re.search(r"(?:year built|built)[:\s]+(18\d{2}|19\d{2}|20\d{2})", compact, re.IGNORECASE)
+    if year_match:
+        parsed["year_built"] = year_match.group(1)
+
+    return parsed
+
+
+def _api_not_connected(provider: str, secret_name: str) -> dict[str, Any]:
+    return {
+        "provider": provider,
+        "connected": bool(get_secret(secret_name, "")),
+        "message": "API connected." if get_secret(secret_name, "") else "API not connected - using manual data only.",
+    }
+
+
+def provider_connection_status() -> list[dict[str, Any]]:
+    return [
+        _api_not_connected("RentCast", "RENTCAST_API_KEY"),
+        _api_not_connected("Regrid", "REGRID_API_KEY"),
+        _api_not_connected("ATTOM", "ATTOM_API_KEY"),
+    ]
+
+
+def get_property_details(address: str) -> dict[str, Any]:
+    if get_secret("RENTCAST_API_KEY", ""):
+        return lookup_rentcast(address)
+    return {"found": False, "source": "Property Details Provider", "notes": "API not connected - using manual data only."}
+
+
+def get_tax_info(address: str) -> dict[str, Any]:
+    if get_secret("REGRID_API_KEY", "") or get_secret("ATTOM_API_KEY", ""):
+        return {"found": False, "source": "Tax Provider", "notes": "Provider interface ready. API-specific implementation pending."}
+    return {"found": False, "source": "Tax Provider", "notes": "API not connected - using manual data only."}
+
+
+def get_sold_comps(address: str) -> dict[str, Any]:
+    if get_secret("RENTCAST_API_KEY", "") or get_secret("ATTOM_API_KEY", ""):
+        return {"found": False, "source": "Sold Comps Provider", "notes": "Provider interface ready. API-specific implementation pending."}
+    return {"found": False, "source": "Sold Comps Provider", "notes": "API not connected - using manual data only."}
+
+
+def get_rent_comps(address: str) -> dict[str, Any]:
+    if get_secret("RENTCAST_API_KEY", ""):
+        return lookup_rentcast(address)
+    return {"found": False, "source": "Rent Comps Provider", "notes": "API not connected - using manual data only."}
+
+
+def get_listing_details(url_or_text: str) -> dict[str, Any]:
+    parsed = parse_listing_text(url_or_text)
+    return {
+        "found": any(value not in ["", 0, 0.0] for value in parsed.values()),
+        "source": "Manual Listing Text",
+        "notes": "Parsed from pasted/manual listing text. Missing fields need manual entry.",
+        "data": parsed,
+    }
+
+
 def first_existing_column(df: pd.DataFrame, possible_names: list[str]) -> str | None:
     lower_map = {str(c).strip().lower(): c for c in df.columns}
 
