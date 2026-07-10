@@ -19,8 +19,13 @@ class Assumptions:
     market_wholesale_buyer_percent: float = 0.70
     slow_flip_max_offer_cap: float = 32000
     slow_flip_first_offer_gap: float = 4000
+    slow_flip_lead_search_max: float = 0
+    slow_flip_lead_search_source: str = "Market Default"
+    above_slow_flip_lead_search_range: bool = False
+    inside_slow_flip_lead_search_range: bool = False
     slow_flip_max_buy_price: float = 0
     slow_flip_max_source: str = "Market Default"
+    above_slow_flip_max_buy_price: bool = False
 
 
 @dataclass
