@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import pandas as pd
 import streamlit as st
 
@@ -301,6 +303,56 @@ def render_final_decision_box(
         "risk_flags": risk_flags,
         "team_action": team_action,
     }
+
+
+def build_deal_log_row(
+    result: dict,
+    deal: DealInput,
+    final_summary: dict,
+    value_source: str,
+    asking_price: float,
+    contract_price: float,
+) -> dict:
+    best = result["best"]
+    return {
+        "date_time_analyzed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "address": deal.address,
+        "market": deal.market,
+        "source_mode": st.session_state.get("source_mode", ""),
+        "lead_source": st.session_state.get("lead_source", ""),
+        "lead_type": deal.lead_type,
+        "deal_type": deal.exit_mode,
+        "asking_price": asking_price,
+        "contract_buy_price": contract_price,
+        "rent": deal.rent,
+        "arv": deal.arv,
+        "value_source": value_source,
+        "manual_comps_average": manual_comps_average(),
+        "repairs": deal.repairs,
+        "final_decision": final_summary["final_decision"],
+        "team_action": final_summary["team_action"],
+        "best_exit": result["best_exit"],
+        "first_offer": best.get("offer_to_send", best.get("target_offer_low", 0)),
+        "internal_max": best.get("max_offer", 0),
+        "estimated_fee": best.get("estimated_fee_at_ask", 0),
+        "missing_info": "; ".join(final_summary["missing_info"]),
+        "risk_flags": "; ".join(final_summary["risk_flags"]),
+        "notes": deal.notes,
+        "suggested_message": result["suggested_message"],
+    }
+
+
+def render_save_deal_analysis(deal_log_row: dict) -> None:
+    st.subheader("Save Deal Analysis")
+    deal_log_df = pd.DataFrame([deal_log_row])
+    st.dataframe(deal_log_df, use_container_width=True)
+    st.download_button(
+        "Save / Download Deal Log Row",
+        data=deal_log_df.to_csv(index=False),
+        file_name="war_room_deal_log_row.csv",
+        mime="text/csv",
+        key="download_deal_log_row",
+    )
 
 
 st.title("🏠 War Room Offer Engine")
@@ -732,6 +784,15 @@ if analyze:
         repair_notes=st.session_state.get("repair_notes", ""),
         assumptions=assumptions,
     )
+    deal_log_row = build_deal_log_row(
+        result=result,
+        deal=deal,
+        final_summary=final_summary,
+        value_source=value_source,
+        asking_price=asking_price_value,
+        contract_price=contract_price_value,
+    )
+    render_save_deal_analysis(deal_log_row)
 
     st.divider()
     st.subheader("Decision")
@@ -788,31 +849,18 @@ if analyze:
 
     with st.expander("Download Analysis CSV"):
         row = {
-            "address": st.session_state["address"],
-            "market": st.session_state["market"],
-            "source_mode": st.session_state.get("source_mode", ""),
-            "lead_source": st.session_state.get("lead_source", ""),
-            "lead_type": st.session_state["lead_type"],
-            "exit_mode": exit_mode,
+            **deal_log_row,
             "grade": result["grade"],
             "final_decision": final_summary["final_decision"],
             "team_action": final_summary["team_action"],
             "missing_info": "; ".join(final_summary["missing_info"]),
             "risk_flags": "; ".join(final_summary["risk_flags"]),
             "decision_reason": final_summary["decision_reason"],
-            "best_exit": result["best_exit"],
-            "asking_price": st.session_state["asking_price"],
-            "rent": st.session_state["rent"],
-            "arv": resolved_arv,
-            "value_source": value_source,
-            "manual_comps_average": manual_comps_average(),
-            "repairs": st.session_state.get("repairs", 0),
-            "first_offer": best.get("offer_to_send", best.get("target_offer_low", 0)),
+            "exit_mode": exit_mode,
             "internal_max_offer": best["max_offer"],
             "estimated_fee_at_ask": best["estimated_fee_at_ask"],
             "livable": st.session_state["livable"],
             "occupancy": st.session_state["occupancy"],
-            "notes": st.session_state["notes"],
         }
         df = pd.DataFrame([row])
         st.dataframe(df, use_container_width=True)
