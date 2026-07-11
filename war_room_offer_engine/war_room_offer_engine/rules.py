@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, asdict
 from typing import Dict, Any
 
@@ -79,6 +80,185 @@ def money(value: float) -> str:
         return "${:,.0f}".format(float(value))
     except Exception:
         return "$0"
+
+
+PRE_CONTRACT_STATUSES = {"Not under contract", "Offer sent", "Verbal agreement"}
+FULL_PACKAGE_STATUSES = {"Under contract", "Closed / owned"}
+DEAL_PROTECTION_WARNING = (
+    "Deal is not under contract. Use teaser only. Do not share exact address, "
+    "seller/source details, parcel ID, or listing link."
+)
+SENSITIVE_BUYER_FIELDS = [
+    "exact address",
+    "seller/source details",
+    "owner name",
+    "listing agent phone/email",
+    "listing/source links",
+    "parcel ID/APN",
+    "county owner record link",
+    "photos with house number or street sign",
+]
+
+
+def contract_allows_full_buyer_package(contract_status: str) -> bool:
+    return str(contract_status or "") in FULL_PACKAGE_STATUSES
+
+
+def default_address_sharing_level(contract_status: str) -> str:
+    return "Full address allowed" if contract_allows_full_buyer_package(contract_status) else "Hide exact address"
+
+
+def default_listing_source_sharing_level(contract_status: str) -> str:
+    return "Full links allowed" if contract_allows_full_buyer_package(contract_status) else "Hide listing/source links"
+
+
+def _sanitize_protected_condition_text(text: str, mold_verified: bool = False) -> str:
+    clean = str(text or "")
+    if mold_verified:
+        return clean
+    replacements = {
+        "black mold": "suspected biological growth",
+        "mold remediation": "moisture/biological growth verification allowance",
+        "visible mold": "visible discoloration",
+        "mold": "moisture staining/discoloration",
+    }
+    for old, new in replacements.items():
+        clean = re.sub(old, new, clean, flags=re.IGNORECASE)
+    return clean
+
+
+def _area_label(context: dict, hide_exact: bool) -> str:
+    city = str(context.get("city") or "").strip()
+    market = str(context.get("market") or "").strip()
+    county = str(context.get("county") or "").strip()
+    state = str(context.get("state") or "").strip()
+    address = str(context.get("address") or "").strip()
+    if not hide_exact and address:
+        return address
+    if city and state:
+        return f"{city} {state} area"
+    if city:
+        return f"{city} area"
+    if county:
+        return f"{county} county area"
+    if market:
+        return f"{market} area"
+    return "this area"
+
+
+def _bed_bath_label(context: dict) -> str:
+    beds = context.get("beds", "")
+    baths = context.get("baths", "")
+    try:
+        beds_text = f"{float(beds):g} bed" if float(beds or 0) > 0 else ""
+    except Exception:
+        beds_text = ""
+    try:
+        baths_text = f"{float(baths):g} bath" if float(baths or 0) > 0 else ""
+    except Exception:
+        baths_text = ""
+    if beds_text and baths_text:
+        return f"{beds_text} / {baths_text}"
+    return beds_text or baths_text or "property"
+
+
+def build_deal_protection_payload(context: dict) -> dict:
+    contract_status = str(context.get("contract_status") or "Not under contract")
+    protect_mode = str(context.get("deal_protection_mode") or "Yes")
+    address_level = str(context.get("address_sharing_level") or default_address_sharing_level(contract_status))
+    listing_level = str(context.get("listing_source_sharing_level") or default_listing_source_sharing_level(contract_status))
+    buyer_message_type = str(context.get("buyer_message_type") or "Pre-contract demand check")
+    locked = contract_allows_full_buyer_package(contract_status)
+    protect_on = protect_mode == "Yes"
+    exact_address_shared = locked and address_level == "Full address allowed"
+    listing_shared = locked and listing_level == "Full links allowed"
+    full_blast_allowed = locked and (not protect_on or locked)
+    buyer_message_allowed = "Full Blast Allowed" if full_blast_allowed else "Teaser Only"
+
+    protected_fields_hidden = []
+    if not exact_address_shared:
+        protected_fields_hidden.append("exact address")
+    if protect_on or not locked:
+        protected_fields_hidden.extend(
+            [
+                "seller/source details",
+                "owner name",
+                "listing agent phone/email",
+                "parcel ID/APN",
+                "county owner record link",
+                "photos with house number or street sign",
+            ]
+        )
+    if not listing_shared:
+        protected_fields_hidden.append("listing/source links")
+    protected_fields_hidden = list(dict.fromkeys(protected_fields_hidden))
+
+    mold_verified = bool(context.get("mold_verified", False))
+    notes = _sanitize_protected_condition_text(context.get("notes", ""), mold_verified)
+    repair_notes = _sanitize_protected_condition_text(context.get("repair_notes", ""), mold_verified)
+    area = _area_label(context, hide_exact=not exact_address_shared)
+    bed_bath = _bed_bath_label(context)
+    arv = float(context.get("arv", 0) or 0)
+    repairs = float(context.get("repairs", 0) or 0)
+    price = float(context.get("asking_price", 0) or 0)
+    listing_url = str(context.get("listing_url") or "").strip()
+    access_notes = _sanitize_protected_condition_text(context.get("access_notes", ""), mold_verified)
+    deadline = str(context.get("buyer_deadline") or "").strip()
+
+    condition_bits = []
+    if arv > 0:
+        condition_bits.append(f"ARV around {money(arv)}")
+    else:
+        condition_bits.append("lower ARV range")
+    if repairs > 0:
+        condition_bits.append(f"needs about {money(repairs)} in work")
+    else:
+        condition_bits.append("needs work")
+    combined_notes = " ".join(part for part in [notes, repair_notes] if str(part or "").strip())
+    if combined_notes:
+        condition_bits.append(combined_notes[:180])
+
+    pre_contract_teaser = (
+        f"Checking buyer demand for a possible deal in the {area}. "
+        f"{bed_bath}, {', '.join(condition_bits)}. "
+        "Who is buying this area, and what price range would you need?"
+    )
+
+    blast_lines = [
+        "Buyer deal package:",
+        f"Address: {context.get('address', '') if exact_address_shared else area}",
+        f"Property: {bed_bath}",
+        f"Price: {money(price)}" if price > 0 else "Price: TBD",
+        f"ARV: {money(arv)}" if arv > 0 else "ARV: verify",
+        f"Repairs: {money(repairs)}" if repairs > 0 else "Repairs: verify",
+    ]
+    if listing_shared and listing_url:
+        blast_lines.append(f"Listing/source link: {listing_url}")
+    if access_notes:
+        blast_lines.append(f"Access/photos note: {access_notes}")
+    else:
+        blast_lines.append("Access/photos note: photos and access details available internally.")
+    if deadline:
+        blast_lines.append(f"Buyer response deadline: {deadline}")
+    under_contract_blast = "\n".join(blast_lines)
+
+    protected_buyer_message = under_contract_blast if full_blast_allowed and buyer_message_type == "Under-contract buyer blast" else pre_contract_teaser
+    warning = "" if full_blast_allowed else DEAL_PROTECTION_WARNING
+
+    return {
+        "contract_status": contract_status,
+        "deal_protection_mode": protect_mode,
+        "address_sharing_level": address_level,
+        "listing_source_sharing_level": listing_level,
+        "buyer_message_type": buyer_message_type,
+        "pre_contract_teaser_message": pre_contract_teaser,
+        "under_contract_buyer_blast": under_contract_blast,
+        "protected_buyer_message": protected_buyer_message,
+        "exact_address_shared": "Yes" if exact_address_shared else "No",
+        "protected_fields_hidden": protected_fields_hidden,
+        "buyer_message_allowed": buyer_message_allowed,
+        "warning": warning,
+    }
 
 
 def clamp_nonnegative(value: float) -> float:
