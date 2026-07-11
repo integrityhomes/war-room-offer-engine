@@ -213,6 +213,19 @@ def run_apify_zillow_actor(actor_id: str, actor_input: dict[str, Any] | None = N
     return run_actor_for_items(actor_id=actor_id, actor_input=actor_input or {}, token=token, limit=limit)
 
 
+def parse_apify_dataset_id(dataset_id_or_url: str) -> str:
+    text = str(dataset_id_or_url or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"/datasets/([^/?#]+)", text)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"datasetId=([^&#]+)", text)
+    if match:
+        return match.group(1).strip()
+    return text.rstrip("/").split("/")[-1].strip()
+
+
 def apify_zillow_result_from_record(record: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_zillow_record(record)
     data = normalized.get("data", {})

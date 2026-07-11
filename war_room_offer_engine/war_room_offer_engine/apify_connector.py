@@ -37,6 +37,10 @@ FIELD_ALIASES: dict[str, list[str]] = {
     ],
     "rent": ["rentZestimate", "rentEstimate", "estimatedRent", "hdpData.homeInfo.rentZestimate"],
     "arv": ["zestimate", "estimatedValue", "homeValue", "hdpData.homeInfo.zestimate"],
+    "tax_assessed_value": ["taxAssessedValue", "taxAssessment", "assessedValue", "hdpData.homeInfo.taxAssessedValue"],
+    "taxes": ["annualTaxes", "propertyTax", "taxAnnualAmount", "hdpData.homeInfo.taxHistory.0.taxPaid"],
+    "last_sale_date": ["lastSoldDate", "lastSaleDate", "dateSold.date", "hdpData.homeInfo.dateSold"],
+    "last_sale_price": ["lastSoldPrice", "lastSalePrice", "dateSold.price", "hdpData.homeInfo.lastSoldPrice"],
     "beds": ["beds", "bedrooms", "bedroomsTotal", "hdpData.homeInfo.bedrooms"],
     "baths": ["baths", "bathrooms", "bathroomsTotal", "hdpData.homeInfo.bathrooms"],
     "sqft": ["sqft", "livingArea", "livingAreaValue", "area", "hdpData.homeInfo.livingArea"],
@@ -53,6 +57,8 @@ FIELD_ALIASES: dict[str, list[str]] = {
     "listing_agent_phone": ["agentPhone", "brokerPhone", "listingAgent.phone", "attributionInfo.agentPhoneNumber"],
     "listing_brokerage": ["brokerageName", "brokerName", "attributionInfo.brokerName"],
     "listing_agent_email": ["agentEmail", "listingAgent.email", "attributionInfo.agentEmail"],
+    "source_name": ["sourceName", "source", "provider", "sellerType"],
+    "source_confidence": ["sourceConfidence", "confidence", "matchConfidence"],
     "sold_price": ["soldPrice", "lastSoldPrice", "lastSalePrice", "dateSold.price", "hdpData.homeInfo.lastSoldPrice"],
     "sold_date": ["soldDate", "lastSoldDate", "lastSaleDate", "dateSold.date", "hdpData.homeInfo.dateSold"],
     "distance_miles": ["distance", "distanceMiles"],
@@ -169,7 +175,19 @@ def normalize_zillow_record(record: dict[str, Any]) -> dict[str, Any]:
         if value in [None, "", [], {}]:
             continue
         field_sources[field_name] = source_key
-        if field_name in ["asking_price", "rent", "arv", "beds", "baths", "sqft", "taxes", "days_on_market", "year_built"]:
+        if field_name in [
+            "asking_price",
+            "rent",
+            "arv",
+            "tax_assessed_value",
+            "taxes",
+            "last_sale_price",
+            "beds",
+            "baths",
+            "sqft",
+            "days_on_market",
+            "year_built",
+        ]:
             number = money_to_float(value)
             data[field_name] = number if number > 0 else value
         else:
