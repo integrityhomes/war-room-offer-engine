@@ -63,6 +63,19 @@ FIELD_ALIASES: dict[str, list[str]] = {
 STANDARD_FIELDS = list(FIELD_ALIASES.keys())
 
 
+def parse_apify_dataset_id(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"/datasets/([^/?#]+)", text)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"datasetId=([^&#]+)", text)
+    if match:
+        return match.group(1).strip()
+    return text.rstrip("/").split("/")[-1].split("?")[0].split("#")[0].strip()
+
+
 def get_secret(name: str, default: str = "") -> str:
     try:
         import streamlit as st
