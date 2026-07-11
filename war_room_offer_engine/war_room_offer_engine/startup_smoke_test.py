@@ -143,7 +143,6 @@ for function_name in [
     "provider_connection_status",
     "fetch_apify_zillow_dataset",
     "run_apify_zillow_actor",
-    "parse_apify_dataset_id",
     "get_sold_comps",
     "sold_comps_from_apify_rows",
 ]:
@@ -173,9 +172,15 @@ missing_price = apify_connector.normalize_zillow_record({key: value for key, val
 check("Missing price" in missing_price.get("errors", []), "Apify/Zillow missing price is a clear error")
 deduped = apify_connector.normalize_zillow_records([fake_zillow_record, dict(fake_zillow_record)])
 check(len(deduped.get("rows", [])) == 1 and len(deduped.get("duplicates", [])) == 1, "Apify/Zillow duplicate-address protection works")
-check(data_sources.parse_apify_dataset_id("https://console.apify.com/storage/datasets/abc123/items") == "abc123", "Apify dataset URL parses to dataset id")
-missing_token_result = data_sources.fetch_apify_zillow_dataset(dataset_id="", limit=1)
-check(not missing_token_result.get("ok"), "missing Apify token or dataset does not crash")
+check(
+    apify_connector.parse_apify_dataset_id("https://api.apify.com/v2/datasets/abc123/items?clean=true") == "abc123",
+    "Apify/Zillow dataset URL parses to dataset id",
+)
+missing_token_result = apify_connector.fetch_dataset_items("abc123", token="", limit=1)
+check(
+    not missing_token_result.get("ok") and "Missing Apify token" in missing_token_result.get("error", ""),
+    "Apify/Zillow missing token fails safely",
+)
 
 fake_comp_rows = [
     {
@@ -281,66 +286,16 @@ check(hasattr(app, "build_repair_breakdown"), "app repair breakdown function imp
 check(hasattr(app, "build_exit_strategy_confidence"), "app exit confidence function imports")
 check(hasattr(app, "build_dispo_test_summary"), "app dispo test summary function imports")
 check(hasattr(app, "generate_buyer_blast_messages"), "app buyer blast generator imports")
-check(hasattr(app, "apply_apify_zillow_import"), "app Apify import function imports")
+check(hasattr(app, "apply_apify_zillow_import"), "app Apify/Zillow import function imports")
 
-for field in [
-    "address",
-    "city",
-    "state",
-    "zip",
-    "market",
-    "asking_price",
-    "rent",
-    "sheet_arv",
-    "beds",
-    "baths",
-    "sqft",
-    "lot_size",
-    "year_built",
-    "property_type",
-    "days_on_market",
-    "status",
-    "listing_url",
-    "listing_agent_name",
-    "listing_agent_phone",
-    "listing_agent_email",
-    "listing_brokerage",
-    "tax_assessed_value",
-    "taxes",
-    "last_sale_date",
-    "last_sale_price",
-]:
-    app.st.session_state[field] = app.FIELD_DEFAULTS.get(field, "" if field not in ["asking_price", "rent", "sheet_arv", "beds", "baths", "sqft"] else 0)
-
-rich_zillow_record = dict(
-    fake_zillow_record,
-    rentZestimate=1100,
-    zestimate=150000,
-    taxAssessedValue=90000,
-    annualTaxes=1800,
-    lastSoldDate="2025-01-15",
-    lastSoldPrice=70000,
-    agentName="Casey Agent",
-    agentPhone="555-111-2222",
-    agentEmail="casey@example.com",
-    brokerageName="Test Brokerage",
-    lotAreaString="0.25 acres",
-    yearBuilt=1950,
-    homeType="Single Family",
-    sourceConfidence="High",
-)
-rich_row = apify_connector.normalize_zillow_record(rich_zillow_record)
-rich_row["source"] = "Apify Zillow Dataset"
-imported_fields, skipped_fields = app.apply_apify_zillow_import(rich_row)
-check("address" in imported_fields and app.st.session_state["address"].startswith("123 Main St"), "fake Apify record imports address into app field")
-check(app.st.session_state["asking_price"] == 85000, "fake Apify record imports asking price into app field")
-check(app.st.session_state["listing_agent_name"] == "Casey Agent", "fake Apify record imports agent into app field")
-check(app.st.session_state["field_source_map_json"], "Apify import stores field source map json")
-
-manual_row = apify_connector.normalize_zillow_record(dict(rich_zillow_record, bedrooms=3))
-app.st.session_state["beds"] = 2
-manual_imported, manual_skipped = app.apply_apify_zillow_import(manual_row)
-check(app.st.session_state["beds"] == 2 and "beds" in manual_skipped, "manual override wins after Apify import")
+app.st.session_state["asking_price"] = 99000
+app.st.session_state["rent"] = app.FIELD_DEFAULTS["rent"]
+app.st.session_state["address"] = ""
+app.st.session_state["sheet_arv"] = 0
+imported_fields, skipped_fields = app.apply_apify_zillow_import(normalized)
+check("asking_price" in skipped_fields, "manual override wins during Apify/Zillow import")
+check("address" in imported_fields and "rent" not in skipped_fields, "Apify/Zillow import fills blank/default lead fields")
+check(app.st.session_state["apify_field_sources"].get("asking_price") == "price", "Apify/Zillow import stores field source map")
 
 
 def set_exit_inputs(
@@ -526,5 +481,84 @@ app.st.session_state["repair_notes"] = "roof, kitchen, bath, paint, flooring"
 with contextlib.redirect_stderr(io.StringIO()):
     repair_breakdown = app.build_repair_breakdown()
 check(repair_breakdown.get("total_estimated_repairs", 0) > 0, "repair breakdown function works")
+
+protection_context = {
+    "contract_status": "Not under contract",
+    "deal_protection_mode": "Yes",
+    "address_sharing_level": "Hide exact address",
+    "listing_source_sharing_level": "Hide listing/source links",
+    "buyer_message_type": "Pre-contract demand check",
+    "address": "123 Secret St, Lebanon VA",
+    "city": "Lebanon",
+    "state": "VA",
+    "market": "Lebanon VA",
+    "beds": 2,
+    "baths": 1,
+    "arv": 65000,
+    "repairs": 25000,
+    "asking_price": 30000,
+    "listing_url": "https://www.zillow.com/homedetails/123-secret-st",
+    "notes": "street parking only and functional issues noted",
+    "repair_notes": "possible mold in bathroom",
+    "mold_verified": False,
+}
+protected = rules.build_deal_protection_payload(protection_context)
+check(protected["exact_address_shared"] == "No", "not under contract hides exact address")
+check("123 Secret St" not in protected["protected_buyer_message"], "protected teaser generates without exact address")
+check(protected["buyer_message_allowed"] == "Teaser Only", "not under contract allows teaser only")
+
+offer_sent_context = dict(protection_context)
+offer_sent_context.update(
+    {
+        "contract_status": "Offer sent",
+        "listing_source_sharing_level": "Hide listing/source links",
+        "listing_agent_phone": "555-111-2222",
+        "listing_agent_email": "agent@example.com",
+    }
+)
+offer_sent = rules.build_deal_protection_payload(offer_sent_context)
+check("zillow.com" not in offer_sent["protected_buyer_message"].lower(), "offer sent hides listing URL")
+check("555-111-2222" not in offer_sent["protected_buyer_message"], "offer sent hides agent phone")
+check("agent@example.com" not in offer_sent["protected_buyer_message"], "offer sent hides agent email")
+
+under_contract_context = dict(protection_context)
+under_contract_context.update(
+    {
+        "contract_status": "Under contract",
+        "address_sharing_level": "Full address allowed",
+        "listing_source_sharing_level": "Full links allowed",
+        "buyer_message_type": "Under-contract buyer blast",
+        "mold_verified": True,
+    }
+)
+under_contract = rules.build_deal_protection_payload(under_contract_context)
+check(under_contract["buyer_message_allowed"] == "Full Blast Allowed", "under contract allows full buyer blast")
+check("123 Secret St" in under_contract["under_contract_buyer_blast"], "under contract blast includes full address")
+check("zillow.com" in under_contract["under_contract_buyer_blast"].lower(), "under contract blast allows listing URL")
+
+check("mold" not in protected["protected_buyer_message"].lower(), "buyer blast does not use the word mold unless Mold Verified is Yes")
+mold_verified_context = dict(protection_context)
+mold_verified_context["mold_verified"] = True
+mold_allowed = rules.build_deal_protection_payload(mold_verified_context)
+check("mold" in mold_allowed["protected_buyer_message"].lower(), "buyer blast may use mold when Mold Verified is Yes")
+
+app.st.session_state["contract_status"] = "Not under contract"
+app.st.session_state["deal_protection_mode"] = "Yes"
+app.st.session_state["buyer_message_allowed"] = "Teaser Only"
+app.st.session_state["protected_fields_hidden"] = protected["protected_fields_hidden"]
+cleveland_protected_context = dict(protection_context)
+cleveland_protected_context.update(
+    {
+        "market": "Cleveland OH",
+        "city": "Cleveland",
+        "address": "125 Risk Stack Ave, Cleveland OH",
+        "notes": cleveland_deal.notes,
+        "repair_notes": "high repairs",
+    }
+)
+cleveland_protected = rules.build_deal_protection_payload(cleveland_protected_context)
+app.st.session_state["protected_buyer_message"] = cleveland_protected["protected_buyer_message"]
+cleveland_messages = app.generate_buyer_blast_messages(cleveland_deal, cleveland_result)
+check(cleveland_messages["buyer_blast_text"] == cleveland_protected["protected_buyer_message"], "Cleveland-style risky deal generates teaser only when not under contract")
 
 print("Startup smoke test passed.")

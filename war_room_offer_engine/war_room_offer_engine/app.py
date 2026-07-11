@@ -10,6 +10,31 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from types import SimpleNamespace
+
+try:
+    from ui_sections.buyer_demand_ui import render_buyer_demand_section
+    from ui_sections.buyer_outreach_ui import render_buyer_outreach_section
+    from ui_sections.deal_protection_ui import render_deal_protection_section
+    from ui_sections.decision_ui import render_decision_section
+    from ui_sections.lead_intake_ui import render_lead_intake_section
+    from ui_sections.repair_ui import render_repair_section
+except ImportError:
+    try:
+        from .ui_sections.buyer_demand_ui import render_buyer_demand_section
+        from .ui_sections.buyer_outreach_ui import render_buyer_outreach_section
+        from .ui_sections.deal_protection_ui import render_deal_protection_section
+        from .ui_sections.decision_ui import render_decision_section
+        from .ui_sections.lead_intake_ui import render_lead_intake_section
+        from .ui_sections.repair_ui import render_repair_section
+    except ImportError:
+        from war_room_offer_engine.ui_sections.buyer_demand_ui import render_buyer_demand_section
+        from war_room_offer_engine.ui_sections.buyer_outreach_ui import render_buyer_outreach_section
+        from war_room_offer_engine.ui_sections.deal_protection_ui import render_deal_protection_section
+        from war_room_offer_engine.ui_sections.decision_ui import render_decision_section
+        from war_room_offer_engine.ui_sections.lead_intake_ui import render_lead_intake_section
+        from war_room_offer_engine.ui_sections.repair_ui import render_repair_section
+
 # Developer validation before merge:
 # python -m py_compile war_room_offer_engine/war_room_offer_engine/app.py
 # python -m py_compile war_room_offer_engine/war_room_offer_engine/rules.py
@@ -36,15 +61,18 @@ try:
     Assumptions = _rules_module.Assumptions
     DealInput = _rules_module.DealInput
     analyze_deal = _rules_module.analyze_deal
+    build_deal_protection_payload = _rules_module.build_deal_protection_payload
+    default_address_sharing_level = _rules_module.default_address_sharing_level
+    default_listing_source_sharing_level = _rules_module.default_listing_source_sharing_level
     money = _rules_module.money
 except ImportError:
     try:
-        from .rules import Assumptions, DealInput, analyze_deal, money
+        from .rules import Assumptions, DealInput, analyze_deal, build_deal_protection_payload, default_address_sharing_level, default_listing_source_sharing_level, money
     except ImportError:
         try:
-            from war_room_offer_engine.rules import Assumptions, DealInput, analyze_deal, money
+            from war_room_offer_engine.rules import Assumptions, DealInput, analyze_deal, build_deal_protection_payload, default_address_sharing_level, default_listing_source_sharing_level, money
         except ImportError:
-            from war_room_offer_engine.war_room_offer_engine.rules import Assumptions, DealInput, analyze_deal, money
+            from war_room_offer_engine.war_room_offer_engine.rules import Assumptions, DealInput, analyze_deal, build_deal_protection_payload, default_address_sharing_level, default_listing_source_sharing_level, money
 
 try:
     from ai_writer import build_ai_summary
@@ -66,7 +94,6 @@ try:
         provider_connection_status,
         fetch_apify_zillow_dataset,
         run_apify_zillow_actor,
-        parse_apify_dataset_id,
         get_sold_comps,
         sold_comps_from_apify_rows,
         sold_comps_from_csv_rows,
@@ -82,7 +109,6 @@ except ImportError:
             provider_connection_status,
             fetch_apify_zillow_dataset,
             run_apify_zillow_actor,
-            parse_apify_dataset_id,
             get_sold_comps,
             sold_comps_from_apify_rows,
             sold_comps_from_csv_rows,
@@ -98,7 +124,6 @@ except ImportError:
                 provider_connection_status,
                 fetch_apify_zillow_dataset,
                 run_apify_zillow_actor,
-                parse_apify_dataset_id,
                 get_sold_comps,
                 sold_comps_from_apify_rows,
                 sold_comps_from_csv_rows,
@@ -113,7 +138,6 @@ except ImportError:
                 provider_connection_status,
                 fetch_apify_zillow_dataset,
                 run_apify_zillow_actor,
-                parse_apify_dataset_id,
                 get_sold_comps,
                 sold_comps_from_apify_rows,
                 sold_comps_from_csv_rows,
@@ -283,17 +307,6 @@ FIELD_DEFAULTS = {
     "apify_imported_at": "",
     "apify_source": "",
     "apify_zpid": "",
-    "imported_from_apify": "No",
-    "imported_lead_id": "",
-    "imported_listing_url": "",
-    "imported_agent_name": "",
-    "imported_agent_phone": "",
-    "imported_agent_email": "",
-    "imported_days_on_market": 0,
-    "imported_listing_status": "",
-    "imported_missing_fields": [],
-    "field_source_map_json": "{}",
-    "apify_source_confidence": "",
     "apify_duplicate_count": 0,
     "apify_field_sources": {},
     "apify_imported_fields": [],
@@ -342,6 +355,20 @@ FIELD_DEFAULTS = {
     "buyer_target_price_confirmed": "Pending",
     "confirmed_buyer_target_price": 0,
     "buyer_concerns": [],
+    "contract_status": "Not under contract",
+    "deal_protection_mode": "Yes",
+    "address_sharing_level": "Hide exact address",
+    "listing_source_sharing_level": "Hide listing/source links",
+    "buyer_message_type": "Pre-contract demand check",
+    "buyer_access_notes": "",
+    "buyer_deadline": "",
+    "pre_contract_teaser_message": "",
+    "under_contract_buyer_blast": "",
+    "protected_buyer_message": "",
+    "exact_address_shared": "No",
+    "protected_fields_hidden": [],
+    "buyer_message_allowed": "Teaser Only",
+    "deal_protection_warning": "",
     "buyer_blast_text": "",
     "buyer_blast_email": "",
     "slow_flip_buyer_message": "",
@@ -531,164 +558,6 @@ def resolve_repair_source() -> tuple[float, str]:
     if ai_repair > 0:
         return ai_repair, "AI Repair Estimate"
     return 0.0, "Missing"
-
-
-def render_automatic_sold_comps_section() -> None:
-    st.markdown("### Automatic Sold Comps")
-    st.caption("Pull, paste, or upload sold comps. Manual ARV override still wins, and manual comps remain the default fallback before automatic comps.")
-
-    if not st.session_state.get("auto_comp_address") and st.session_state.get("address"):
-        st.session_state["auto_comp_address"] = st.session_state.get("address", "")
-
-    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-    with c1:
-        st.text_input("Subject property address", key="auto_comp_address")
-    with c2:
-        st.selectbox("Search radius", ["0.5 mile", "1 mile", "2 miles", "5 miles"], key="auto_comp_radius")
-    with c3:
-        st.selectbox("Sold date range", ["Last 6 months", "Last 12 months", "Last 24 months"], key="auto_comp_date_range")
-    with c4:
-        st.selectbox("Comp source", ["Auto", "RentCast", "Apify/Zillow", "Manual pasted", "CSV upload", "Manual comps only"], key="auto_comp_source")
-
-    upload = st.file_uploader("Upload sold comps CSV", type=["csv"], key="auto_comp_csv_upload")
-    st.text_area(
-        "Paste sold comps",
-        height=100,
-        key="auto_comp_pasted_text",
-        placeholder="Example: 123 Oak St, sold $92,000, 3 bed, 1 bath, 1050 sqft, sold 2026-04-15, 0.4 miles",
-    )
-
-    fetch_col, use_col, clear_col = st.columns(3)
-    with fetch_col:
-        fetch_clicked = st.button("Fetch / Refresh Sold Comps", key="fetch_auto_sold_comps")
-    with use_col:
-        use_best_clicked = st.button("Use Best Automatic ARV", key="use_best_auto_arv")
-    with clear_col:
-        clear_clicked = st.button("Clear Auto Comps", key="clear_auto_sold_comps")
-
-    if clear_clicked:
-        for key in [
-            "auto_sold_comps",
-            "auto_arv_summary",
-            "auto_comp_summary_json",
-            "excluded_comp_flags_json",
-        ]:
-            st.session_state.pop(key, None)
-        st.session_state["use_auto_arv_over_manual_comps"] = False
-        store_auto_arv_summary([], calculate_arv_from_comps([]))
-        st.success("Automatic sold comps cleared.")
-
-    if fetch_clicked:
-        source_choice = st.session_state.get("auto_comp_source", "Auto")
-        comps: list[dict] = []
-        messages: list[str] = []
-        address = st.session_state.get("auto_comp_address") or st.session_state.get("address", "")
-        radius = radius_to_float(st.session_state.get("auto_comp_radius", "1 mile"))
-
-        if source_choice in ["Auto", "RentCast"]:
-            result = get_sold_comps(address, radius_miles=radius, limit=25)
-            comps.extend(result.get("comps", []) or [])
-            if result.get("notes"):
-                messages.append(result.get("notes"))
-
-        if source_choice in ["Auto", "Apify/Zillow"]:
-            apify_comps = sold_comps_from_apify_rows(st.session_state.get("apify_zillow_preview", []))
-            comps.extend(apify_comps)
-            if not apify_comps:
-                messages.append("No sold comp rows found in the current Apify/Zillow preview.")
-
-        if source_choice in ["Auto", "CSV upload"] and upload is not None:
-            try:
-                csv_rows = pd.read_csv(upload).to_dict("records")
-                comps.extend(sold_comps_from_csv_rows(csv_rows))
-            except Exception as exc:
-                messages.append(f"CSV comp import failed: {exc}")
-
-        pasted_text = st.session_state.get("auto_comp_pasted_text", "")
-        if source_choice in ["Auto", "Manual pasted"] and pasted_text.strip():
-            comps.extend(sold_comps_from_pasted_text(pasted_text))
-
-        if source_choice in ["Auto", "Manual comps only"]:
-            comps.extend(manual_comp_records())
-
-        seen = set()
-        unique_comps = []
-        for comp in comps:
-            address_key = re.sub(r"[^a-z0-9]+", " ", str(comp.get("comp_address", "")).lower()).strip()
-            if address_key and address_key in seen:
-                continue
-            if address_key:
-                seen.add(address_key)
-            unique_comps.append(comp)
-
-        scored = score_sold_comps(
-            unique_comps,
-            comp_subject(),
-            st.session_state.get("auto_comp_radius", "1 mile"),
-            st.session_state.get("auto_comp_date_range", "Last 12 months"),
-        )
-        st.session_state["auto_sold_comps"] = scored
-        summary = calculate_arv_from_comps(scored)
-        store_auto_arv_summary(scored, summary)
-        st.session_state["use_auto_arv_over_manual_comps"] = False
-        if messages:
-            st.session_state["auto_comp_messages"] = messages
-
-    scored_comps = st.session_state.get("auto_sold_comps", []) or []
-    if scored_comps:
-        st.write("Sold Comp Preview")
-        table_rows = []
-        included_keys = set()
-        for idx, comp in enumerate(scored_comps):
-            default_include = bool(comp.get("include_default", False))
-            include = st.checkbox(
-                f"Include comp {idx + 1}: {comp.get('comp_address') or 'Unknown address'}",
-                value=default_include,
-                key=f"auto_comp_include_{idx}",
-            )
-            if include:
-                included_keys.add(str(idx))
-            table_rows.append(
-                {
-                    "Address": comp.get("comp_address", ""),
-                    "Sold Price": money(comp.get("sold_price", 0)),
-                    "Sold Date": comp.get("sold_date", ""),
-                    "Beds": comp.get("beds", 0),
-                    "Baths": comp.get("baths", 0),
-                    "Sqft": comp.get("square_feet", 0),
-                    "Distance": comp.get("distance_miles", 0),
-                    "Source": comp.get("source", ""),
-                    "Score": comp.get("score", ""),
-                    "Include?": "Yes" if include else "No",
-                    "Why excluded / flags": "; ".join(comp.get("flags", [])),
-                }
-            )
-
-        summary = calculate_arv_from_comps(scored_comps, included_keys)
-        store_auto_arv_summary(scored_comps, summary)
-        st.dataframe(pd.DataFrame(table_rows), use_container_width=True)
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Recommended ARV", money(summary.get("recommended_arv", 0)))
-        m2.metric("ARV Range", f"{money(summary.get('low_arv', 0))} - {money(summary.get('high_arv', 0))}")
-        m3.metric("ARV Confidence", summary.get("arv_confidence", "Not enough data"))
-        m4.metric("Included / Total", f"{len(included_keys)} / {len(scored_comps)}")
-        st.info(summary.get("explanation", ""))
-
-        manual_avg = manual_comps_average()
-        auto_arv = safe_float(summary.get("recommended_arv", 0))
-        if manual_avg > 0 and auto_arv > 0 and abs(auto_arv - manual_avg) / manual_avg > 0.15:
-            st.warning("Manual comps and automatic sold comps differ by more than 15%. Review both before relying on the ARV.")
-
-    for message in st.session_state.get("auto_comp_messages", []):
-        st.caption(message)
-
-    if use_best_clicked:
-        if safe_float(st.session_state.get("auto_recommended_arv", 0)) > 0:
-            st.session_state["use_auto_arv_over_manual_comps"] = True
-            st.success("Automatic sold comp ARV selected. Manual ARV override still wins if entered.")
-        else:
-            st.warning("No automatic sold comp ARV is available yet.")
 
 
 def percent_label(value: float) -> str:
@@ -964,6 +833,8 @@ def generate_buyer_blast_messages(deal: DealInput, result: dict, dispo_summary: 
     )
     short_notes = notes[:260] if notes else "Buyer feedback requested before finalizing offer."
     property_line = f"{city_market}. {deal.beds:g} bed, {deal.baths:g} bath, {int(deal.sqft or 0):,} sqft"
+    protected_message = st.session_state.get("protected_buyer_message", "")
+    teaser_only = st.session_state.get("buyer_message_allowed", "Teaser Only") != "Full Blast Allowed"
 
     text = safe_condition_text(
         f"Investor special in {property_line}. Estimated ARV around {arv_text}, repairs around {repairs_text}. "
@@ -989,6 +860,10 @@ def generate_buyer_blast_messages(deal: DealInput, result: dict, dispo_summary: 
         f"App buyer target: {money(result.get('wholesale', {}).get('buyer_target', 0))}. "
         f"Confirmed buyer target: {money(buyer_target)}. Dispo recommendation: {dispo_summary.get('recommendation', '')}."
     )
+    if teaser_only and protected_message:
+        text = protected_message
+        email = protected_message
+        slow_flip = protected_message
     return {
         "buyer_blast_text": text,
         "buyer_blast_email": email,
@@ -1291,95 +1166,48 @@ def can_import_over_state_field(state_key: str) -> bool:
     return current_value in [None, "", 0, 0.0, "Unknown", default_value]
 
 
-APIFY_IMPORT_MAPPING = {
-    "address": "address",
-    "city": "city",
-    "state": "state",
-    "zip": "zip",
-    "asking_price": "asking_price",
-    "rent": "rent",
-    "arv": "sheet_arv",
-    "tax_assessed_value": "tax_assessed_value",
-    "taxes": "taxes",
-    "last_sale_date": "last_sale_date",
-    "last_sale_price": "last_sale_price",
-    "beds": "beds",
-    "baths": "baths",
-    "sqft": "sqft",
-    "lot_size": "lot_size",
-    "year_built": "year_built",
-    "property_type": "property_type",
-    "days_on_market": "days_on_market",
-    "status": "status",
-    "listing_url": "listing_url",
-    "listing_agent_name": "listing_agent_name",
-    "listing_agent_phone": "listing_agent_phone",
-    "listing_agent_email": "listing_agent_email",
-    "listing_brokerage": "listing_brokerage",
-}
-
-
-APIFY_REQUIRED_SUMMARY_FIELDS = [
-    "address",
-    "asking_price",
-    "beds",
-    "baths",
-    "sqft",
-    "days_on_market",
-    "listing_agent_name",
-    "listing_url",
-]
-
-
-def apify_missing_fields(data: dict) -> list[str]:
-    missing = []
-    for field in APIFY_REQUIRED_SUMMARY_FIELDS:
-        value = data.get(field)
-        if value in [None, "", 0, 0.0]:
-            missing.append(field)
-    return missing
-
-
 def apply_apify_zillow_import(row: dict) -> tuple[list[str], list[str]]:
     data = row.get("data", {}) if isinstance(row, dict) else {}
     field_sources = row.get("field_sources", {}) if isinstance(row, dict) else {}
+    mapping = {
+        "address": "address",
+        "city": "city",
+        "state": "state",
+        "zip": "zip",
+        "asking_price": "asking_price",
+        "rent": "rent",
+        "arv": "sheet_arv",
+        "beds": "beds",
+        "baths": "baths",
+        "sqft": "sqft",
+        "lot_size": "lot_size",
+        "year_built": "year_built",
+        "property_type": "property_type",
+        "days_on_market": "days_on_market",
+        "status": "status",
+        "listing_url": "listing_url",
+        "listing_agent_name": "listing_agent_name",
+        "listing_agent_phone": "listing_agent_phone",
+        "listing_agent_email": "listing_agent_email",
+        "listing_brokerage": "listing_brokerage",
+    }
     imported = []
     skipped = []
-    source_map = dict(st.session_state.get("apify_field_sources", {}) or {})
 
-    for source_key, state_key in APIFY_IMPORT_MAPPING.items():
+    for source_key, state_key in mapping.items():
         value = data.get(source_key)
         if value in [None, "", 0, 0.0]:
             continue
         if not can_import_over_state_field(state_key):
             skipped.append(state_key)
             continue
-        if state_key in [
-            "asking_price",
-            "rent",
-            "sqft",
-            "days_on_market",
-            "sheet_arv",
-            "year_built",
-            "tax_assessed_value",
-            "taxes",
-            "last_sale_price",
-        ]:
+        if state_key in ["asking_price", "rent", "sqft", "days_on_market", "sheet_arv", "year_built"]:
             st.session_state[state_key] = int(float(value))
         elif state_key in ["beds", "baths"]:
             st.session_state[state_key] = float(value)
         else:
             st.session_state[state_key] = str(value)
         imported.append(state_key)
-        source_map[state_key] = {
-            "label": "Imported from Apify/Zillow",
-            "source_field": field_sources.get(source_key, source_key),
-        }
-
-    if data.get("city") and data.get("state") and can_import_over_state_field("market"):
-        st.session_state["market"] = f"{data.get('city')} {data.get('state')}".strip()
-        imported.append("market")
-        source_map["market"] = {"label": "Imported from Apify/Zillow", "source_field": "city/state"}
 
     if data.get("zpid"):
         st.session_state["apify_zpid"] = str(data.get("zpid"))
@@ -1387,20 +1215,9 @@ def apply_apify_zillow_import(row: dict) -> tuple[list[str], list[str]]:
     st.session_state["apify_source"] = row.get("source", "Apify Zillow")
     st.session_state["apify_import_status"] = "Imported"
     st.session_state["apify_imported_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    st.session_state["apify_field_sources"] = source_map
+    st.session_state["apify_field_sources"] = field_sources
     st.session_state["apify_imported_fields"] = imported
     st.session_state["apify_skipped_manual_fields"] = skipped
-    st.session_state["imported_from_apify"] = "Yes"
-    st.session_state["imported_lead_id"] = str(data.get("zpid") or row.get("duplicate_key") or data.get("address", ""))
-    st.session_state["imported_listing_url"] = data.get("listing_url", "")
-    st.session_state["imported_agent_name"] = data.get("listing_agent_name", "")
-    st.session_state["imported_agent_phone"] = data.get("listing_agent_phone", "")
-    st.session_state["imported_agent_email"] = data.get("listing_agent_email", "")
-    st.session_state["imported_days_on_market"] = int(safe_float(data.get("days_on_market", 0)))
-    st.session_state["imported_listing_status"] = data.get("status", "")
-    st.session_state["imported_missing_fields"] = apify_missing_fields(data)
-    st.session_state["field_source_map_json"] = json.dumps(source_map)
-    st.session_state["apify_source_confidence"] = data.get("source_confidence", row.get("source", "Apify/Zillow"))
     st.session_state["data_intake_source"] = "Zillow / Apify"
     st.session_state["lead_source"] = "Zillow / Apify"
 
@@ -1408,68 +1225,6 @@ def apply_apify_zillow_import(row: dict) -> tuple[list[str], list[str]]:
     st.session_state["arv"] = int(resolved_arv) if resolved_arv > 0 else 0
     st.session_state["value_source"] = value_source
     return imported, skipped
-
-
-def build_imported_lead_summary(row: dict | None = None) -> dict:
-    data = row.get("data", {}) if isinstance(row, dict) else {}
-    if not data:
-        data = {
-            "address": st.session_state.get("address", ""),
-            "asking_price": st.session_state.get("asking_price", 0),
-            "beds": st.session_state.get("beds", 0),
-            "baths": st.session_state.get("baths", 0),
-            "sqft": st.session_state.get("sqft", 0),
-            "days_on_market": st.session_state.get("days_on_market", 0),
-            "listing_agent_name": st.session_state.get("listing_agent_name", ""),
-            "listing_url": st.session_state.get("listing_url", ""),
-        }
-    missing = apify_missing_fields(data)
-    return {
-        "Address": data.get("address", ""),
-        "Price": money(data.get("asking_price", 0)),
-        "Beds/Baths": f"{data.get('beds', '')}/{data.get('baths', '')}",
-        "Sqft": data.get("sqft", ""),
-        "DOM": data.get("days_on_market", ""),
-        "Agent": data.get("listing_agent_name", ""),
-        "Listing URL": data.get("listing_url", ""),
-        "Missing fields": ", ".join(missing) if missing else "None",
-        "Fields imported successfully": ", ".join(st.session_state.get("apify_imported_fields", [])),
-    }
-
-
-def apify_lead_option_label(row: dict, idx: int) -> str:
-    data = row.get("data", {}) if isinstance(row, dict) else {}
-    address = data.get("address", "Unknown address")
-    price = money(data.get("asking_price", 0))
-    beds = data.get("beds", "")
-    baths = data.get("baths", "")
-    return f"{idx}: {address} | {price} | {beds}/{baths}"
-
-
-def render_imported_lead_summary(row: dict | None = None) -> None:
-    summary = build_imported_lead_summary(row)
-    st.markdown("#### Imported Lead Summary")
-    st.dataframe(pd.DataFrame([summary]), use_container_width=True)
-    source_map = st.session_state.get("apify_field_sources", {}) or {}
-    if source_map:
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "field": field,
-                        "source label": info.get("label", "Imported from Apify/Zillow") if isinstance(info, dict) else "Imported from Apify/Zillow",
-                        "source field": info.get("source_field", "") if isinstance(info, dict) else str(info),
-                    }
-                    for field, info in source_map.items()
-                ]
-            ),
-            use_container_width=True,
-        )
-    missing = summary.get("Missing fields", "")
-    if missing and missing != "None":
-        st.warning("Needs manual entry: " + missing)
-    if st.session_state.get("apify_import_status") == "Imported":
-        st.success("Lead imported. Review all fields before analyzing.")
 
 
 def build_missing_info(deal: DealInput, uploaded_files, repair_notes: str) -> list[str]:
@@ -1768,6 +1523,10 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         "confirmed_buyer_price": dispo_summary.get("confirmed_buyer_target_price", 0),
         "buyer_proof_level": st.session_state.get("buyer_proof", "Unknown"),
         "dispo_test_recommendation": dispo_summary.get("recommendation", "Get buyer commitment first"),
+        "contract_status": st.session_state.get("contract_status", "Not under contract"),
+        "deal_protection_status": st.session_state.get("deal_protection_mode", "Yes"),
+        "buyer_message_allowed": st.session_state.get("buyer_message_allowed", "Teaser Only"),
+        "protected_fields_hidden": st.session_state.get("protected_fields_hidden", []),
     }
 
 
@@ -1809,6 +1568,12 @@ def render_simple_deal_answer(simple_answer: dict) -> None:
         b1.metric("Buyer Outreach Status", simple_answer.get("buyer_outreach_status", "Not sent"))
         b2.metric("Confirmed Buyer Price", money(simple_answer.get("confirmed_buyer_price", 0)))
         b3.metric("Buyer Proof Level", simple_answer.get("buyer_proof_level", "Unknown"))
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Contract Status", simple_answer.get("contract_status", "Not under contract"))
+        p2.metric("Deal Protection Status", simple_answer.get("deal_protection_status", "Yes"))
+        p3.metric("Buyer Message Allowed?", simple_answer.get("buyer_message_allowed", "Teaser Only"))
+        hidden_fields = simple_answer.get("protected_fields_hidden", [])
+        st.caption("Protected Fields Hidden: " + (", ".join(hidden_fields) if hidden_fields else "None"))
         if simple_answer.get("buyer_feedback_summary"):
             st.write("Buyer Feedback Summary:")
             st.write(safe_condition_text(simple_answer.get("buyer_feedback_summary", "")))
@@ -1973,6 +1738,8 @@ def render_exit_strategy_recommendation(exit_summary: dict, result: dict) -> Non
 def render_buyer_blast_messages(messages: dict) -> None:
     st.subheader("Buyer Blast Message Generator")
     with st.container(border=True):
+        if st.session_state.get("buyer_message_allowed", "Teaser Only") != "Full Blast Allowed":
+            st.warning(st.session_state.get("deal_protection_warning") or "Deal is not under contract. Use teaser only. Do not share exact address, seller/source details, parcel ID, or listing link.")
         st.text_area("Wholesale buyer text message", value=messages.get("buyer_blast_text", ""), height=120)
         st.text_area("Wholesale buyer email", value=messages.get("buyer_blast_email", ""), height=220)
         st.text_area("Slow flip / owner-finance buyer message", value=messages.get("slow_flip_buyer_message", ""), height=120)
@@ -2215,6 +1982,17 @@ def build_deal_log_row(
         "buyer_target_price_confirmed": st.session_state.get("buyer_target_price_confirmed", ""),
         "confirmed_buyer_target_price": st.session_state.get("confirmed_buyer_target_price", 0),
         "buyer_concerns": "; ".join(st.session_state.get("buyer_concerns", []) or []),
+        "contract_status": st.session_state.get("contract_status", "Not under contract"),
+        "deal_protection_mode": st.session_state.get("deal_protection_mode", "Yes"),
+        "address_sharing_level": st.session_state.get("address_sharing_level", "Hide exact address"),
+        "listing_source_sharing_level": st.session_state.get("listing_source_sharing_level", "Hide listing/source links"),
+        "buyer_message_type": st.session_state.get("buyer_message_type", "Pre-contract demand check"),
+        "pre_contract_teaser_message": st.session_state.get("pre_contract_teaser_message", ""),
+        "under_contract_buyer_blast": st.session_state.get("under_contract_buyer_blast", ""),
+        "protected_buyer_message": st.session_state.get("protected_buyer_message", ""),
+        "exact_address_shared": st.session_state.get("exact_address_shared", "No"),
+        "protected_fields_hidden": "; ".join(st.session_state.get("protected_fields_hidden", []) or []),
+        "buyer_message_allowed": st.session_state.get("buyer_message_allowed", "Teaser Only"),
         "buyer_blast_text": buyer_messages.get("buyer_blast_text", st.session_state.get("buyer_blast_text", "")),
         "buyer_blast_email": buyer_messages.get("buyer_blast_email", st.session_state.get("buyer_blast_email", "")),
         "dispo_test_summary": dispo_summary.get("summary", st.session_state.get("dispo_test_summary", "")),
@@ -2256,16 +2034,6 @@ def build_deal_log_row(
         "apify_skipped_manual_fields": "; ".join(st.session_state.get("apify_skipped_manual_fields", [])),
         "apify_field_sources_json": json.dumps(st.session_state.get("apify_field_sources", {})),
         "apify_last_error": st.session_state.get("apify_last_error", ""),
-        "imported_from_apify": st.session_state.get("imported_from_apify", "No"),
-        "imported_lead_id": st.session_state.get("imported_lead_id", ""),
-        "imported_listing_url": st.session_state.get("imported_listing_url", st.session_state.get("listing_url", "")),
-        "imported_agent_name": st.session_state.get("imported_agent_name", st.session_state.get("listing_agent_name", "")),
-        "imported_agent_phone": st.session_state.get("imported_agent_phone", st.session_state.get("listing_agent_phone", "")),
-        "imported_agent_email": st.session_state.get("imported_agent_email", st.session_state.get("listing_agent_email", "")),
-        "imported_days_on_market": st.session_state.get("imported_days_on_market", st.session_state.get("days_on_market", 0)),
-        "imported_listing_status": st.session_state.get("imported_listing_status", st.session_state.get("status", "")),
-        "imported_missing_fields": "; ".join(st.session_state.get("imported_missing_fields", []) or []),
-        "field_source_map_json": st.session_state.get("field_source_map_json", json.dumps(st.session_state.get("apify_field_sources", {}))),
         "listing_agent_name": st.session_state.get("listing_agent_name", ""),
         "listing_agent_phone": st.session_state.get("listing_agent_phone", ""),
         "listing_agent_email": st.session_state.get("listing_agent_email", ""),
@@ -2347,381 +2115,78 @@ assumptions = Assumptions(
     above_slow_flip_max_buy_price=bool(st.session_state.get("above_slow_flip_max_buy_price", False)),
 )
 
-st.subheader("1. Pull Property Data")
 
-source_col1, source_col2 = st.columns([1, 1])
-with source_col1:
-    st.radio(
-        "Source mode",
-        ["Zillow / Sheet Match", "Off-Market / Manual"],
-        key="source_mode",
-        horizontal=True,
-        help="Zillow / Sheet Match searches your published Master Feed. Off-Market / Manual skips the sheet and uses RentCast + your manual inputs.",
-    )
-with source_col2:
-    st.selectbox(
-        "Lead source",
-        ["Zillow / Apify", "MLS / Agent", "Off-Market Seller", "Facebook", "Driving for Dollars", "Cold Text Reply", "Manual Entry", "Other"],
-        key="lead_source",
-    )
+ui_context = SimpleNamespace(
+    pd=pd,
+    json=json,
+    re=re,
+    Assumptions=Assumptions,
+    DealInput=DealInput,
+    analyze_deal=analyze_deal,
+    money=money,
+    build_ai_summary=build_ai_summary,
+    build_deal_protection_payload=build_deal_protection_payload,
+    default_address_sharing_level=default_address_sharing_level,
+    default_listing_source_sharing_level=default_listing_source_sharing_level,
+    fetch_all_sources=fetch_all_sources,
+    merge_results=merge_results,
+    get_secret=get_secret,
+    parse_listing_text=parse_listing_text,
+    provider_connection_status=provider_connection_status,
+    fetch_apify_zillow_dataset=fetch_apify_zillow_dataset,
+    run_apify_zillow_actor=run_apify_zillow_actor,
+    get_sold_comps=get_sold_comps,
+    sold_comps_from_apify_rows=sold_comps_from_apify_rows,
+    sold_comps_from_csv_rows=sold_comps_from_csv_rows,
+    sold_comps_from_pasted_text=sold_comps_from_pasted_text,
+    calculate_arv_from_comps=calculate_arv_from_comps,
+    radius_to_float=radius_to_float,
+    score_sold_comps=score_sold_comps,
+    analyze_repairs=analyze_repairs,
+    repair_number_for_offer=repair_number_for_offer,
+    available_markets=available_markets,
+    get_market_profile=get_market_profile,
+    get_market_slow_flip_lead_search_max=get_market_slow_flip_lead_search_max,
+    get_market_slow_flip_max_buy_price=get_market_slow_flip_max_buy_price,
+    get_market_wholesale_buyer_percent=get_market_wholesale_buyer_percent,
+    generate_boots_on_ground_notes=generate_boots_on_ground_notes,
+    safe_float=safe_float,
+    safe_condition_text=safe_condition_text,
+    condition_wording_used=condition_wording_used,
+    mold_verified_bool=mold_verified_bool,
+    comp_subject=comp_subject,
+    manual_comp_records=manual_comp_records,
+    manual_comps_average=manual_comps_average,
+    store_auto_arv_summary=store_auto_arv_summary,
+    resolve_value_source=resolve_value_source,
+    resolve_repair_source=resolve_repair_source,
+    percent_label=percent_label,
+    advanced_wholesale_buyer_model=advanced_wholesale_buyer_model,
+    resolve_slow_flip_max_buy_price=resolve_slow_flip_max_buy_price,
+    is_above_slow_flip_max_buy_price=is_above_slow_flip_max_buy_price,
+    update_state_from_auto_pull=update_state_from_auto_pull,
+    apply_apify_zillow_import=apply_apify_zillow_import,
+    repair_cushion_percent_value=repair_cushion_percent_value,
+    render_repair_number_explanation=render_repair_number_explanation,
+    build_repair_breakdown=build_repair_breakdown,
+    render_repair_estimate_breakdown=render_repair_estimate_breakdown,
+    render_final_decision_box=render_final_decision_box,
+    build_deal_log_row=build_deal_log_row,
+    render_save_deal_analysis=render_save_deal_analysis,
+    build_dispo_test_summary=build_dispo_test_summary,
+    min_assignment_fee=min_assignment_fee,
+    exception_assignment_fee=exception_assignment_fee,
+    slow_flip_rent_multiple=slow_flip_rent_multiple,
+    close_title_buffer=close_title_buffer,
+    target_offer_discount=target_offer_discount,
+    manual_wholesale_override=manual_wholesale_override,
+    wholesale_buyer_percent_arv=wholesale_buyer_percent_arv,
+    slow_flip_max_offer_cap=slow_flip_max_offer_cap,
+    slow_flip_first_offer_gap=slow_flip_first_offer_gap,
+)
 
-st.subheader("Auto-Fill Lead From Apify/Zillow")
-with st.container(border=True):
-    status_text = "Connected" if get_secret("APIFY_TOKEN") or get_secret("APIFY_API_TOKEN") else "Not connected - manual entry still works"
-    st.info(f"Apify connection status: {status_text}")
-    af1, af2 = st.columns([2, 1])
-    with af1:
-        st.text_input("Dataset ID or Dataset URL", key="apify_autofill_dataset_id")
-    with af2:
-        st.number_input("Lead preview limit", min_value=1, max_value=200, value=25, step=5, key="apify_autofill_preview_limit")
-        pull_apify_autofill = st.button("Pull leads", type="secondary", use_container_width=True)
+render_lead_intake_section(st, ui_context)
 
-    if pull_apify_autofill:
-        dataset_id = parse_apify_dataset_id(st.session_state.get("apify_autofill_dataset_id", ""))
-        st.session_state["apify_dataset_id"] = dataset_id
-        result = fetch_apify_zillow_dataset(
-            dataset_id=dataset_id,
-            limit=int(st.session_state.get("apify_autofill_preview_limit", 25) or 25),
-        )
-        st.session_state["apify_last_error"] = result.get("error", "")
-        rows = result.get("rows", []) if result.get("ok") else []
-        for row in rows:
-            row["source"] = result.get("source", "Apify Zillow Dataset")
-        st.session_state["apify_zillow_preview"] = rows
-        st.session_state["apify_zillow_duplicates"] = result.get("duplicates", [])
-        st.session_state["apify_duplicate_count"] = len(result.get("duplicates", []))
-        if result.get("ok"):
-            st.success(f"Loaded {len(rows)} clean lead record(s).")
-        else:
-            st.error(result.get("error", "Could not load Apify/Zillow dataset."))
-
-    if st.session_state.get("apify_duplicate_count", 0):
-        st.warning(f"Duplicate-address protection found {st.session_state['apify_duplicate_count']} duplicate record(s). Showing one clean record per address.")
-
-    autofill_rows = st.session_state.get("apify_zillow_preview", [])
-    if autofill_rows:
-        preview_table = []
-        for idx, row in enumerate(autofill_rows):
-            data = row.get("data", {})
-            preview_table.append(
-                {
-                    "lead": idx,
-                    "address": data.get("address", ""),
-                    "price": data.get("asking_price", 0),
-                    "beds": data.get("beds", ""),
-                    "baths": data.get("baths", ""),
-                    "sqft": data.get("sqft", ""),
-                    "dom": data.get("days_on_market", ""),
-                    "agent": data.get("listing_agent_name", ""),
-                    "url": data.get("listing_url", ""),
-                    "missing": ", ".join(apify_missing_fields(data)) or "None",
-                }
-            )
-        st.markdown("#### Preview leads")
-        st.dataframe(pd.DataFrame(preview_table), use_container_width=True)
-        lead_labels = [apify_lead_option_label(row, idx) for idx, row in enumerate(autofill_rows)]
-        selected_label = st.selectbox("Select lead", lead_labels, key="apify_autofill_selected_label")
-        selected_idx = lead_labels.index(selected_label) if selected_label in lead_labels else 0
-        selected_row = autofill_rows[selected_idx]
-        if st.button("Import selected lead into analyzer", type="primary"):
-            if selected_row.get("errors"):
-                st.error("Cannot import row: " + "; ".join(selected_row.get("errors", [])))
-            else:
-                imported, skipped = apply_apify_zillow_import(selected_row)
-                st.success("Lead imported. Review all fields before analyzing.")
-                st.caption("Imported fields: " + (", ".join(imported) if imported else "none"))
-                if skipped:
-                    st.info("Manual override kept for: " + ", ".join(skipped))
-        render_imported_lead_summary(selected_row)
-    elif st.session_state.get("apify_last_error"):
-        st.warning(st.session_state.get("apify_last_error", ""))
-
-with st.expander("Lead Data Intake", expanded=False):
-    st.caption("Manual/pasted/vendor intake only. This does not scrape Zillow, Redfin, Realtor.com, or other listing sites.")
-    intake_cols = st.columns(3)
-    with intake_cols[0]:
-        st.selectbox(
-            "Manual source selector",
-            [
-                "Zillow manual/pasted",
-                "Redfin manual/pasted",
-                "Realtor manual/pasted",
-                "XLeads",
-                "PropStream",
-                "DealMachine",
-                "RentCast",
-                "County records",
-                "MLS/manual",
-                "Other",
-            ],
-            key="data_intake_source",
-        )
-        st.text_input("Manual Listing URL", key="listing_url")
-    with intake_cols[1]:
-        lead_intake_csv = st.file_uploader("Upload lead CSV", type=["csv"], key="lead_intake_csv")
-        st.text_input("County tax/GIS manual link", key="county_tax_gis_link")
-    with intake_cols[2]:
-        for provider in provider_connection_status():
-            st.write(("Connected: " if provider["connected"] else "API not connected - ") + provider["provider"])
-
-    st.markdown("### Apify / Zillow Import")
-    st.caption("Preview Apify Zillow data before import. Imported fields fill blank/default fields only; manual edits stay protected.")
-    apify_cols = st.columns([1.2, 1.2, 0.7])
-    with apify_cols[0]:
-        st.text_input("Apify Dataset ID", key="apify_dataset_id")
-        preview_dataset = st.button("Preview Apify Dataset", type="secondary")
-    with apify_cols[1]:
-        st.text_input("Apify Actor ID", key="apify_actor_id")
-        st.text_area("Apify Actor Input JSON", height=80, key="apify_actor_input_json")
-        preview_actor = st.button("Run Actor + Preview", type="secondary")
-    with apify_cols[2]:
-        st.number_input("Preview limit", min_value=1, max_value=200, step=5, key="apify_preview_limit")
-
-    if preview_dataset:
-        dataset_id = parse_apify_dataset_id(st.session_state.get("apify_dataset_id", ""))
-        st.session_state["apify_dataset_id"] = dataset_id
-        result = fetch_apify_zillow_dataset(
-            dataset_id=dataset_id,
-            limit=int(st.session_state.get("apify_preview_limit", 25) or 25),
-        )
-        st.session_state["apify_last_error"] = result.get("error", "")
-        rows = result.get("rows", []) if result.get("ok") else []
-        for row in rows:
-            row["source"] = result.get("source", "Apify Zillow Dataset")
-        st.session_state["apify_zillow_preview"] = rows
-        st.session_state["apify_zillow_duplicates"] = result.get("duplicates", [])
-        st.session_state["apify_duplicate_count"] = len(result.get("duplicates", []))
-        if result.get("ok"):
-            st.success(f"Loaded {len(rows)} unique Apify/Zillow rows.")
-        else:
-            st.error(result.get("error", "Could not load Apify/Zillow dataset."))
-
-    if preview_actor:
-        try:
-            actor_input = json.loads(st.session_state.get("apify_actor_input_json", "{}") or "{}")
-        except Exception as exc:
-            actor_input = {}
-            st.session_state["apify_last_error"] = f"Actor input JSON is invalid: {exc}"
-            st.error(st.session_state["apify_last_error"])
-        else:
-            result = run_apify_zillow_actor(
-                actor_id=st.session_state.get("apify_actor_id", ""),
-                actor_input=actor_input,
-                limit=int(st.session_state.get("apify_preview_limit", 25) or 25),
-            )
-            st.session_state["apify_last_error"] = result.get("error", "")
-            rows = result.get("rows", []) if result.get("ok") else []
-            for row in rows:
-                row["source"] = result.get("source", "Apify Zillow Actor")
-            st.session_state["apify_zillow_preview"] = rows
-            st.session_state["apify_zillow_duplicates"] = result.get("duplicates", [])
-            st.session_state["apify_duplicate_count"] = len(result.get("duplicates", []))
-            if result.get("ok"):
-                st.success(f"Loaded {len(rows)} unique Apify/Zillow rows.")
-            else:
-                st.error(result.get("error", "Could not run Apify actor."))
-
-    apify_preview_rows = st.session_state.get("apify_zillow_preview", [])
-    if st.session_state.get("apify_last_error"):
-        st.warning(st.session_state["apify_last_error"])
-    if st.session_state.get("apify_duplicate_count", 0):
-        st.info(f"Duplicate-address protection removed {st.session_state['apify_duplicate_count']} duplicate row(s).")
-    if apify_preview_rows:
-        preview_table = []
-        for idx, row in enumerate(apify_preview_rows):
-            data = row.get("data", {})
-            preview_table.append(
-                {
-                    "row": idx,
-                    "address": data.get("address", ""),
-                    "price": data.get("asking_price", 0),
-                    "beds": data.get("beds", ""),
-                    "baths": data.get("baths", ""),
-                    "sqft": data.get("sqft", ""),
-                    "status": data.get("status", ""),
-                    "url": data.get("listing_url", ""),
-                    "warnings": "; ".join(row.get("warnings", [])),
-                    "errors": "; ".join(row.get("errors", [])),
-                }
-            )
-        st.dataframe(pd.DataFrame(preview_table), use_container_width=True)
-        st.number_input(
-            "Apify/Zillow row to import",
-            min_value=0,
-            max_value=max(len(apify_preview_rows) - 1, 0),
-            step=1,
-            key="apify_selected_row",
-        )
-        if st.button("Import selected Apify/Zillow lead", type="secondary"):
-            selected_row = apify_preview_rows[int(st.session_state.get("apify_selected_row", 0) or 0)]
-            if selected_row.get("errors"):
-                st.error("Cannot import row: " + "; ".join(selected_row.get("errors", [])))
-            else:
-                imported, skipped = apply_apify_zillow_import(selected_row)
-                st.success("Imported fields: " + (", ".join(imported) if imported else "none"))
-                if skipped:
-                    st.info("Kept manual fields unchanged: " + ", ".join(skipped))
-
-    st.text_area("Paste Listing Text", height=130, key="listing_text")
-    if lead_intake_csv is not None:
-        try:
-            lead_df = pd.read_csv(lead_intake_csv)
-            st.dataframe(lead_df.head(5), use_container_width=True)
-            if st.button("Use first CSV row", type="secondary"):
-                first_row = lead_df.iloc[0].to_dict()
-                csv_map = {
-                    "address": ["property address", "address", "property_address"],
-                    "asking_price": ["asking/list price", "asking price", "price", "list_price"],
-                    "beds": ["beds", "bedrooms"],
-                    "baths": ["baths", "bathrooms"],
-                    "sqft": ["square footage", "sqft", "sq_ft"],
-                    "taxes": ["annual taxes", "taxes"],
-                    "days_on_market": ["days on market", "dom"],
-                    "listing_url": ["listing url", "url", "listing_url"],
-                }
-                lower_row = {str(k).strip().lower(): v for k, v in first_row.items()}
-                filled = []
-                for state_key, names in csv_map.items():
-                    for name in names:
-                        if name in lower_row and lower_row[name] not in [None, "", 0, 0.0]:
-                            st.session_state[state_key] = lower_row[name]
-                            filled.append(state_key)
-                            break
-                st.success("Filled from CSV: " + ", ".join(filled) if filled else "Needs manual entry.")
-        except Exception as e:
-            st.warning(f"Could not read CSV yet: {e}")
-
-    if st.button("Parse pasted listing text", type="secondary"):
-        parsed = parse_listing_text(st.session_state.get("listing_text", ""))
-        field_map = {
-            "address": "address",
-            "city": "city",
-            "state": "state",
-            "zip": "zip",
-            "asking_price": "asking_price",
-            "beds": "beds",
-            "baths": "baths",
-            "sqft": "sqft",
-            "lot_size": "lot_size",
-            "year_built": "year_built",
-            "property_type": "property_type",
-            "days_on_market": "days_on_market",
-            "listing_status": "status",
-            "agent_name": "listing_agent_name",
-            "agent_phone": "listing_agent_phone",
-            "agent_email": "listing_agent_email",
-            "listing_brokerage": "listing_brokerage",
-            "tax_assessed_value": "tax_assessed_value",
-            "annual_taxes": "taxes",
-            "last_sale_date": "last_sale_date",
-            "last_sale_price": "last_sale_price",
-            "owner_name": "owner_name",
-            "rent_estimate": "rent",
-            "arv_estimate": "manual_arv_override",
-            "comp_source": "comp_source",
-        }
-        updated = []
-        for parsed_key, state_key in field_map.items():
-            value = parsed.get(parsed_key)
-            if value not in [None, "", 0, 0.0]:
-                st.session_state[state_key] = value
-                updated.append(state_key)
-        if updated:
-            st.success("Parsed and filled: " + ", ".join(updated))
-        else:
-            st.info("Needs manual entry.")
-
-    lead_detail_cols = st.columns(4)
-    with lead_detail_cols[0]:
-        st.text_input("City", key="city")
-        st.text_input("State", key="state")
-        st.text_input("Zip", key="zip")
-    with lead_detail_cols[1]:
-        st.text_input("Lot size", key="lot_size")
-        st.text_input("Year built", key="year_built")
-        st.text_input("Property type", key="property_type")
-    with lead_detail_cols[2]:
-        st.text_input("Listing agent name", key="listing_agent_name")
-        st.text_input("Listing agent phone", key="listing_agent_phone")
-        st.text_input("Listing agent email", key="listing_agent_email")
-    with lead_detail_cols[3]:
-        st.text_input("Listing brokerage", key="listing_brokerage")
-        st.number_input("Tax assessed value", min_value=0, step=1000, key="tax_assessed_value")
-        st.text_input("Comp source", key="comp_source")
-
-    sale_cols = st.columns(3)
-    with sale_cols[0]:
-        st.text_input("Last sale date", key="last_sale_date")
-    with sale_cols[1]:
-        st.number_input("Last sale price", min_value=0, step=1000, key="last_sale_price")
-    with sale_cols[2]:
-        st.text_input("Owner name if available from approved source", key="owner_name")
-
-if st.session_state.get("source_mode") == "Off-Market / Manual":
-    st.info("Off-market/manual mode skips the Zillow/Master Feed. Enter the seller ask manually if you have it. RentCast will still pull rent, beds, baths, sq ft, value, and facts.")
-else:
-    st.info("Zillow/Sheet mode uses RentCast plus your Master Feed CSV to pull asking price, Zillow link, status, and other listing data when the address matches.")
-
-lookup_col1, lookup_col2 = st.columns([3, 1])
-with lookup_col1:
-    st.text_input("Property address", key="address", placeholder="123 Main St, Decatur IL 62522")
-with lookup_col2:
-    st.write("")
-    st.write("")
-    pull_data = st.button("Pull Data", type="primary", use_container_width=True)
-
-if pull_data:
-    include_listing_sheet = st.session_state.get("source_mode") == "Zillow / Sheet Match"
-    spinner_text = "Pulling RentCast + Master Feed data..." if include_listing_sheet else "Pulling RentCast data only..."
-    with st.spinner(spinner_text):
-        results = fetch_all_sources(
-            st.session_state["address"],
-            beds=float(st.session_state.get("beds", 0) or 0),
-            baths=float(st.session_state.get("baths", 0) or 0),
-            sqft=float(st.session_state.get("sqft", 0) or 0),
-            include_listing_sheet=include_listing_sheet,
-            
-        )
-        merged = merge_results(results)
-        st.session_state["last_source_results"] = results
-        st.session_state["last_auto_pull"] = merged
-        update_state_from_auto_pull(merged)
-
-        good_sources = []
-        for item in results:
-            if isinstance(item, dict):
-                if item.get("found") or item.get("ok"):
-                    good_sources.append(item.get("source", "Unknown"))
-            else:
-                if getattr(item, "ok", False) or getattr(item, "found", False):
-                    good_sources.append(getattr(item, "source", "Unknown"))
-
-        if good_sources:
-            st.success("Pulled data from: " + ", ".join(good_sources))
-        else:
-            st.warning("No data pulled yet. Add Streamlit secrets or verify the address. Manual analysis still works.")
-
-        with st.expander("Data pull results"):
-            for result in results:
-                if isinstance(result, dict):
-                    source = result.get("source", "Unknown")
-                    found = result.get("found") or result.get("ok")
-                    message = result.get("notes") or result.get("message") or ""
-                    data = result.get("data", None)
-                else:
-                    source = getattr(result, "source", "Unknown")
-                    found = getattr(result, "ok", False) or getattr(result, "found", False)
-                    message = getattr(result, "message", "") or getattr(result, "notes", "")
-                    data = getattr(result, "data", None)
-
-                if found:
-                    st.success(f"{source}: {message}")
-                    if data:
-                        st.write(data)
-                else:
-                    st.info(f"{source}: {message}") 
-
-       
 st.caption("Works for Zillow, MLS, agent leads, and off-market sellers. Slow Flip uses rent/livability; ARV and repairs are reference unless you switch to Wholesale/Auto.")
 
 exit_mode = st.radio(
@@ -2731,706 +2196,8 @@ exit_mode = st.radio(
     help="Use Slow Flip Only for your normal owner-finance/slow-flip buy box. ARV/repairs are informational unless you switch to Wholesale/Auto.",
 )
 
-st.subheader("Buyer Demand / Exit Confidence")
-with st.container(border=True):
-    bd1, bd2, bd3, bd4 = st.columns(4)
-    with bd1:
-        st.selectbox(
-            "Buyer demand confidence",
-            ["Strong buyer demand", "Normal buyer demand", "Limited buyer demand", "Unknown"],
-            key="buyer_demand_confidence",
-        )
-        st.selectbox(
-            "Wholesale buyer list strength",
-            ["Strong active buyers", "Some buyers", "Weak buyer list", "No buyer list yet", "Not applicable"],
-            key="wholesale_buyer_list_strength",
-        )
-    with bd2:
-        st.selectbox(
-            "Slow flip / owner-finance buyer demand",
-            ["Strong", "Normal", "Weak", "Unknown", "Not applicable"],
-            key="slow_flip_buyer_demand",
-        )
-        st.selectbox(
-            "Rental demand confidence",
-            ["Strong verified rents", "Some rent comps", "Weak rent comps", "Conflicting data", "Unknown"],
-            key="rental_demand_confidence",
-        )
-    with bd3:
-        st.selectbox(
-            "Exit strategy confidence",
-            ["Strong", "Moderate", "Weak", "Unknown"],
-            key="exit_strategy_confidence",
-        )
-        st.selectbox(
-            "Property marketability",
-            ["Easy to sell", "Normal", "Limited buyer pool", "Very limited buyer pool"],
-            key="property_marketability",
-        )
-    with bd4:
-        st.selectbox(
-            "Buyer proof",
-            ["Buyer already interested", "Buyer list confirms demand", "Similar deals sold recently", "No buyer proof yet", "Unknown"],
-            key="buyer_proof",
-        )
-    st.multiselect("Exit obstacles", EXIT_OBSTACLE_OPTIONS, key="exit_obstacles")
-
-st.subheader("Buyer Outreach / Dispo Test")
-with st.container(border=True):
-    bo1, bo2, bo3 = st.columns(3)
-    with bo1:
-        st.selectbox(
-            "Outreach status",
-            ["Not sent", "Sent to buyers", "Buyers responded", "Buyer interest confirmed", "No buyer interest", "Not applicable"],
-            key="buyer_outreach_status",
-        )
-        st.number_input("Number of buyers contacted", min_value=0, step=1, key="buyers_contacted_count")
-    with bo2:
-        st.selectbox(
-            "Buyer response level",
-            ["Strong interest", "Some interest", "Weak interest", "No interest", "Not sent yet"],
-            key="buyer_response_level",
-        )
-        st.selectbox(
-            "Buyer target price confirmed?",
-            ["Yes", "No", "Pending", "Not applicable"],
-            key="buyer_target_price_confirmed",
-        )
-    with bo3:
-        st.number_input("Confirmed buyer target price", min_value=0, step=1000, key="confirmed_buyer_target_price")
-    st.text_area("Best buyer feedback", height=90, key="best_buyer_feedback")
-    st.multiselect("Buyer concerns", BUYER_CONCERN_OPTIONS, key="buyer_concerns")
-
-col1, col2, col3 = st.columns([1, 1, 1.45])
-with col1:
-    st.text_input("Market / city", key="market", placeholder="Decatur IL")
-    st.selectbox("Lead type", ["Agent", "Seller", "Wholesaler", "Other"], key="lead_type")
-    st.selectbox("Listing/status", ["Active", "Pending", "Sold", "Off-market", "Unknown"], key="status")
-    st.number_input("Days on market", min_value=0, step=1, key="days_on_market")
-
-with col2:
-    st.number_input("Asking price", min_value=0, step=1000, key="asking_price")
-    st.number_input("Contract / Buy Price", min_value=0, step=1000, key="contract_price")
-    st.number_input("Rent estimate", min_value=0, step=25, key="rent")
-    st.selectbox("Occupancy", ["Unknown", "Vacant", "Tenant occupied", "Owner occupied"], key="occupancy")
-    st.selectbox("Livable now?", ["Unknown", "Yes", "No"], key="livable")
-
-with col3:
-    st.number_input("Beds", min_value=0.0, step=0.5, key="beds")
-    st.number_input("Baths", min_value=0.0, step=0.5, key="baths")
-    st.number_input("Sq ft", min_value=0, step=50, key="sqft")
-    st.number_input("Annual taxes", min_value=0, step=100, key="taxes")
-    st.subheader("3. Repair / Condition Analyzer")
-    st.caption(
-        "Uses investor repair pricing by selected market across IL, VA, MI, St. Louis, IN, AL, and FL. "
-        "Upload photos/videos and add boots-on-ground notes. "
-        "This version prices the repair scope from the notes and uploaded media count. "
-        "Full AI video frame review and audio transcription will be added next."
-    )
-
-    repair_market = st.selectbox(
-        "Repair pricing market",
-        available_markets(),
-        index=0,
-        key="repair_market",
-    )
-    st.number_input(
-        "Manual Slow Flip Max Override",
-        min_value=0,
-        step=5000,
-        key="manual_slow_flip_max_override",
-        help="Leave at $0 to use the market default. Every Virginia market defaults to a $50,000 slow-flip max buy price.",
-    )
-    slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
-    slow_flip_max_buy_price, slow_flip_max_source = resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
-    current_slow_flip_price = safe_float(st.session_state.get("contract_price", 0)) or safe_float(st.session_state.get("asking_price", 0))
-    st.session_state["slow_flip_lead_search_max"] = int(slow_flip_lead_search_max) if slow_flip_lead_search_max > 0 else 0
-    st.session_state["slow_flip_lead_search_source"] = "Market Default"
-    st.session_state["above_slow_flip_lead_search_range"] = bool(slow_flip_lead_search_max > 0 and current_slow_flip_price > slow_flip_lead_search_max)
-    st.session_state["inside_slow_flip_lead_search_range"] = bool(slow_flip_lead_search_max > 0 and current_slow_flip_price <= slow_flip_lead_search_max)
-    st.session_state["slow_flip_max_buy_price_used"] = int(slow_flip_max_buy_price) if slow_flip_max_buy_price > 0 else 0
-    st.session_state["slow_flip_max_source"] = slow_flip_max_source
-    st.session_state["above_slow_flip_max_buy_price"] = bool(
-        slow_flip_max_buy_price > 0 and current_slow_flip_price > slow_flip_max_buy_price
-    )
-    if slow_flip_lead_search_max > 0:
-        st.info(f"Slow Flip Lead Search Max: {money(slow_flip_lead_search_max)}")
-    if slow_flip_max_buy_price > 0:
-        st.info(f"Slow Flip Max Buy Price: {money(slow_flip_max_buy_price)} ({slow_flip_max_source})")
-    else:
-        st.info("Slow Flip Max Buy Price: Not set")
-
-    r2, r3 = st.columns(2)
-
-    with r2:
-        repair_level = st.selectbox(
-            "Repair finish level",
-            ["Investor Basic", "Rental Ready", "Retail Ready"],
-            index=1,
-            key="repair_level",
-        )
-
-    with r3:
-        repair_contingency = st.number_input(
-            "Repair contingency %",
-            min_value=0,
-            max_value=50,
-            value=12,
-            step=1,
-            key="repair_contingency",
-        )
-    st.markdown("### Repair Pricing Settings")
-    pset1, pset2 = st.columns(2)
-    with pset1:
-        st.selectbox(
-            "Pricing Mode",
-            [
-                "Budget handyman",
-                "Investor standard",
-                "Licensed contractor",
-                "Conservative high-risk",
-            ],
-            key="repair_pricing_mode",
-            help="Changes how the app calibrates the price-book estimate against contractor reality.",
-        )
-        st.selectbox(
-            "Market Labor Cost",
-            [
-                "Low-cost market",
-                "Normal market",
-                "High-cost market",
-                "Unknown",
-            ],
-            key="market_labor_cost",
-        )
-        st.number_input(
-            "Manual Repair Adjustment",
-            step=500,
-            key="manual_repair_adjustment",
-            help="Add or subtract dollars from the calculated repair estimate. Manual repair estimate below still overrides everything.",
-        )
-    with pset2:
-        st.selectbox(
-            "Repair Scope Confidence",
-            [
-                "Photos only",
-                "Walkthrough",
-                "Contractor verified",
-                "Unknown",
-            ],
-            key="repair_scope_confidence",
-        )
-        st.selectbox(
-            "Repair Cushion",
-            [
-                "0%",
-                "5%",
-                "10%",
-                "15%",
-                "20%",
-            ],
-            key="repair_cushion_percent",
-        )
-        st.toggle("Show full repair math?", key="show_full_repair_math")
-
-    if st.session_state.get("repair_scope_confidence") in ["Photos only", "Unknown"]:
-        st.warning("Repair scope confidence is limited. Add a walkthrough or contractor estimate before treating the repair number as final.")
-    elif st.session_state.get("repair_scope_confidence") == "Contractor verified":
-        st.success("Contractor verified scope selected. The app will reduce uncertainty warnings, but final offer still depends on the full deal math.")
-
-    uploaded_repair_files = st.file_uploader(
-        "Upload property photos or boots-on-ground walkthrough video",
-        type=["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v", "avi"],
-        accept_multiple_files=True,
-        key="repair_media_files",
-    )
-    st.selectbox(
-        "Moisture/biological growth verified?",
-        [
-            "No",
-            "Unknown",
-            "Suspected staining only",
-            "Yes - inspector verified",
-            "Yes - seller disclosed",
-        ],
-        key="mold_verified",
-        help="If not verified, the app uses moisture/discoloration wording.",
-    )
-    st.caption(condition_wording_used())
-    media_files_for_notes = uploaded_repair_files or []
-
-    photo_files_for_notes = [
-        f for f in media_files_for_notes
-        if str(getattr(f, "name", "")).lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
-    ]
-
-    video_files_for_notes = [
-        f for f in media_files_for_notes
-        if str(getattr(f, "name", "")).lower().endswith((".mp4", ".mov", ".m4v", ".avi"))
-    ]
-
-    selected_video_for_notes = video_files_for_notes[0] if video_files_for_notes else None
-
-    if st.button("Generate boots-on-ground notes from media", type="secondary"):
-        if not photo_files_for_notes and selected_video_for_notes is None:
-            st.warning("Upload at least one photo or video first.")
-        else:
-            with st.spinner("Reviewing uploaded photos/video frames and writing boots-on-ground notes..."):
-                generated_notes = generate_boots_on_ground_notes(
-                    photo_files_for_notes,
-                    selected_video_for_notes,
-                )
-
-            st.session_state["repair_notes"] = safe_condition_text(generated_notes)
-            st.success("Boots-on-ground notes created. Review them below, then click Generate Repair Estimate.") 
-    repair_notes = st.text_area(
-        "Boots-on-ground repair notes",
-        height=140,
-        key="repair_notes",
-        placeholder=(
-            "Example: Roof looks old, kitchen needs cabinets, bathroom floor is soft, "
-            "furnace missing, water heater old, windows damaged, trash out needed."
-        ),
-    )
-
-    generate_repair_estimate = st.button("Generate Repair Estimate", type="secondary")
-
-    if generate_repair_estimate:
-        repair_analysis = analyze_repairs(
-            notes=st.session_state.get("repair_notes", ""),
-            sqft=float(st.session_state.get("sqft", 0) or 1000),
-            baths=float(st.session_state.get("baths", 0) or 1),
-            uploaded_files=uploaded_repair_files,
-            market=st.session_state.get("repair_market", "Central IL"),
-            repair_level=st.session_state.get("repair_level", "Rental Ready"),
-            contingency_pct=float(st.session_state.get("repair_contingency", 12) or 0) / 100,
-            pricing_mode=st.session_state.get("repair_pricing_mode", "Investor standard"),
-            repair_scope_confidence=st.session_state.get("repair_scope_confidence", "Unknown"),
-            market_labor_cost=st.session_state.get("market_labor_cost", "Unknown"),
-            repair_cushion_percent=repair_cushion_percent_value(),
-            manual_repair_adjustment=float(st.session_state.get("manual_repair_adjustment", 0) or 0),
-            mold_verified=mold_verified_bool(),
-        )
-
-        st.session_state["repair_analysis"] = repair_analysis
-        st.session_state["recommended_repairs_from_analyzer"] = repair_number_for_offer(repair_analysis)
-
-    if st.session_state.get("repair_analysis"):
-        repair_analysis = st.session_state["repair_analysis"]
-        estimate = repair_analysis.get("estimate", {})
-
-        st.markdown("#### Repair Estimate Result")
-
-        e1, e2, e3, e4 = st.columns(4)
-
-        with e1:
-            st.metric("Low Repairs", money(estimate.get("total_low", 0)))
-
-        with e2:
-            st.metric("Likely Repairs", money(estimate.get("total_likely", 0)))
-
-        with e3:
-            st.metric("High Repairs", money(estimate.get("total_high", 0)))
-
-        with e4:
-            st.metric("Use In Offer", money(repair_analysis.get("recommended_repair_number", 0)))
-
-        st.info(f"Confidence: {repair_analysis.get('confidence', 'Low')}")
-
-        if repair_analysis.get("red_flags"):
-            st.error(
-                "Red flags needing contractor quote: "
-                + ", ".join(safe_condition_text(flag) for flag in repair_analysis.get("red_flags", []))
-            )
-
-        render_repair_number_explanation(repair_analysis.get("repair_calibration", {}))
-
-        line_items = estimate.get("line_items", [])
-
-        if line_items:
-            st.dataframe(
-                pd.DataFrame(line_items).assign(
-                    label=lambda df: df["label"].map(safe_condition_text),
-                    notes=lambda df: df["notes"].map(safe_condition_text),
-                )[["category", "label", "quantity", "unit", "low", "likely", "high", "notes"]],
-                use_container_width=True,
-            )
-
-        st.text_area(
-            "Repair estimate summary",
-            value=safe_condition_text(repair_analysis.get("summary", "")),
-            height=260,
-        )
-
-        if st.button("Use likely repair number in offer", type="primary"):
-            st.session_state["repairs"] = int(repair_analysis.get("recommended_repair_number", 0) or 0)
-            st.session_state["repair_source"] = "AI Repair Estimate"
-            st.success("Calibrated repair number copied into Estimated repairs. Scroll down and confirm it before analyzing the deal.")
-    st.markdown("### Manual Repair Estimate")
-    st.caption("Use this when you already know the repair number. Manual repair estimate overrides the AI repair estimate.")
-    st.number_input(
-        "Manual repair estimate amount",
-        min_value=0,
-        step=1000,
-        key="manual_repair_estimate",
-    )
-    st.text_area(
-        "Repair notes / scope",
-        height=100,
-        key="manual_repair_notes",
-        placeholder="Example: Roof patch, kitchen refresh, LVP, paint, trash out.",
-    )
-
-    resolved_repairs, repair_source = resolve_repair_source()
-    if resolved_repairs > 0:
-        st.session_state["repairs"] = int(resolved_repairs)
-    st.session_state["repair_source"] = repair_source
-    st.info(f"Repair Source: {repair_source}")
-
-    render_automatic_sold_comps_section()
-
-    st.markdown("### Manual Comp Entry Fallback")
-    st.caption("Use this when RentCast cannot find value/comps. Enter 1 to 5 sold or listed comps.")
-
-    comp_rows = []
-    for idx in range(1, 6):
-        with st.expander(f"Comparable Property {idx}", expanded=(idx == 1)):
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                st.text_input("Address", key=f"manual_comp_{idx}_address")
-            with c2:
-                st.number_input(
-                    "Sold/list price",
-                    min_value=0,
-                    step=1000,
-                    key=f"manual_comp_{idx}_price",
-                )
-
-            c3, c4, c5 = st.columns(3)
-            with c3:
-                st.number_input("Beds", min_value=0.0, step=0.5, key=f"manual_comp_{idx}_beds")
-            with c4:
-                st.number_input("Baths", min_value=0.0, step=0.5, key=f"manual_comp_{idx}_baths")
-            with c5:
-                st.number_input("Sqft", min_value=0, step=50, key=f"manual_comp_{idx}_sqft")
-
-            st.text_input("Condition", key=f"manual_comp_{idx}_condition")
-            st.text_area("Notes", height=80, key=f"manual_comp_{idx}_notes")
-
-        price = safe_float(st.session_state.get(f"manual_comp_{idx}_price", 0))
-        if price > 0:
-            comp_rows.append(
-                {
-                    "address": st.session_state.get(f"manual_comp_{idx}_address", ""),
-                    "sold/list price": price,
-                    "beds": st.session_state.get(f"manual_comp_{idx}_beds", 0),
-                    "baths": st.session_state.get(f"manual_comp_{idx}_baths", 0),
-                    "sqft": st.session_state.get(f"manual_comp_{idx}_sqft", 0),
-                    "condition": st.session_state.get(f"manual_comp_{idx}_condition", ""),
-                    "notes": st.session_state.get(f"manual_comp_{idx}_notes", ""),
-                }
-            )
-
-    comps_average = manual_comps_average()
-    st.metric("Average comp value", money(comps_average))
-    if comp_rows:
-        st.dataframe(pd.DataFrame(comp_rows), use_container_width=True)
-
-    st.number_input(
-        "Manual ARV override",
-        min_value=0,
-        step=1000,
-        key="manual_arv_override",
-        help="Highest priority. Use this when you want to override RentCast, sheet ARV, or manual comps.",
-    )
-
-    resolved_arv, value_source = resolve_value_source()
-    st.session_state["arv"] = int(resolved_arv) if resolved_arv > 0 else 0
-    st.session_state["value_source"] = value_source
-
-    st.markdown("### Value / Wholesale Reference")
-    st.caption(f"Value Source: {value_source}")
-    st.caption(f"ARV Source Used: {st.session_state.get('arv_source_used', value_source)}")
-    st.caption(f"ARV Confidence: {st.session_state.get('arv_confidence', 'Not enough data')}")
-    if st.session_state.get("arv_fallback_reason"):
-        st.caption(st.session_state.get("arv_fallback_reason"))
-    for warning in st.session_state.get("arv_fallback_warnings", []):
-        st.warning(warning)
-
-    market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
-    slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
-    slow_flip_max_buy_price, slow_flip_max_source = resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
-    st.session_state["slow_flip_lead_search_max"] = int(slow_flip_lead_search_max) if slow_flip_lead_search_max > 0 else 0
-    st.session_state["slow_flip_max_buy_price_used"] = int(slow_flip_max_buy_price) if slow_flip_max_buy_price > 0 else 0
-    st.session_state["slow_flip_max_source"] = slow_flip_max_source
-    market_default_buyer_percent = get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
-    wholesale_model = advanced_wholesale_buyer_model(
-        market=st.session_state.get("repair_market", "Central IL"),
-        arv=float(st.session_state.get("arv", 0) or 0),
-        repairs=float(st.session_state.get("repairs", 0) or 0),
-        notes=st.session_state.get("notes", ""),
-        repair_notes=st.session_state.get("repair_notes", "") + " " + st.session_state.get("manual_repair_notes", ""),
-        property_type=st.session_state.get("property_type", ""),
-        days_on_market=int(st.session_state.get("days_on_market", 0) or 0),
-        buyer_demand_confidence=st.session_state.get("buyer_demand_confidence", "Medium"),
-        market_type=st.session_state.get("market_type", "Auto"),
-        occupancy=st.session_state.get("occupancy", "Unknown"),
-        livable=st.session_state.get("livable", "Unknown"),
-        exit_confidence=st.session_state.get("exit_strategy_confidence", "Unknown"),
-    )
-    market_buyer_percent = wholesale_model["buyer_percent"]
-    market_adjustments = wholesale_model["reasons"]
-    final_wholesale_buyer_percent = float(wholesale_buyer_percent_arv) if manual_wholesale_override else market_buyer_percent
-    wholesale_buyer_percent_source = "Manual Override" if manual_wholesale_override else "Market Default"
-
-    p1, p2, p3 = st.columns(3)
-    p1.info(f"Market Profile: {market_profile.get('buyer_profile', 'Normal investor market')}")
-    p2.info(f"Market Repair Multiplier: {float(market_profile.get('repair_multiplier', 1.0)):.2f}x")
-    p3.info(f"Wholesale Buyer % Source: {wholesale_buyer_percent_source}")
-    if slow_flip_lead_search_max > 0:
-        st.caption(f"Slow Flip Lead Search Max: {money(slow_flip_lead_search_max)}")
-    if slow_flip_max_buy_price > 0:
-        current_buy_price = safe_float(st.session_state.get("contract_price", 0)) or safe_float(st.session_state.get("asking_price", 0))
-        above_slow_flip_max_buy_price = is_above_slow_flip_max_buy_price(current_buy_price, slow_flip_max_buy_price)
-        st.caption(f"Slow Flip Max Buy Price: {money(slow_flip_max_buy_price)} ({slow_flip_max_source})")
-        st.caption(f"Above Slow Flip Max Buy Price? {'Yes' if above_slow_flip_max_buy_price else 'No'}")
-    st.caption(f"Market buyer % of ARV used: {percent_label(final_wholesale_buyer_percent)}")
-    st.caption(f"Wholesale Buyer % Range: {wholesale_model['range']} | {wholesale_model['tier']}")
-    st.caption("Wholesale buyers in this market will likely need to be around "
-               f"{percent_label(final_wholesale_buyer_percent)} of ARV because {wholesale_model['reason_text']}")
-    wt1, wt2, wt3 = st.columns(3)
-    wt1.metric("Conservative buyer target", money(wholesale_model["conservative_buyer_target"]))
-    wt2.metric("Aggressive buyer target", money(wholesale_model["aggressive_buyer_target"]))
-    wt3.metric("Recommended wholesale max offer", money(wholesale_model["recommended_wholesale_max_offer"]))
-    if not manual_wholesale_override and market_adjustments:
-        st.caption(" ".join(market_adjustments))
-
-    v1, v2 = st.columns(2)
-
-    with v1:
-        st.number_input(
-            "ARV / estimated resale value",
-            min_value=0,
-            step=1000,
-            key="arv",
-            help="Required on every deal. Auto-filled from RentCast, sheet ARV, manual comps, or manual override.",
-        )
-
-    with v2:
-        st.number_input(
-            "Estimated repairs",
-            min_value=0,
-            step=1000,
-            key="repairs",
-            help="Use $0 only when repairs are truly unknown or not needed for the slow-flip decision.",
-        )
-
-    if float(st.session_state.get("arv", 0) or 0) <= 0:
-        st.warning("ARV is missing. Add ARV or manual comps before making a final offer.")
-
-st.text_area("Seller/agent notes, condition, occupancy, motivation", height=120, key="notes")
-st.caption(f"Current source: {st.session_state.get('source_mode')} / {st.session_state.get('lead_source')}")
-
-analyze = st.button("Analyze Deal", type="primary")
-
-if analyze:
-    asking_price_value = float(st.session_state.get("asking_price", 0) or 0)
-    contract_price_value = float(st.session_state.get("contract_price", 0) or 0)
-    analysis_price = contract_price_value if contract_price_value > 0 else asking_price_value
-    resolved_arv, value_source = resolve_value_source()
-    st.session_state["value_source"] = value_source
-
-    if resolved_arv <= 0:
-        st.warning("ARV is missing. Add ARV or manual comps before making a final offer.")
-
-    slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
-    slow_flip_max_buy_price, slow_flip_max_source = resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
-    st.session_state["slow_flip_lead_search_max"] = int(slow_flip_lead_search_max) if slow_flip_lead_search_max > 0 else 0
-    st.session_state["slow_flip_max_buy_price_used"] = int(slow_flip_max_buy_price) if slow_flip_max_buy_price > 0 else 0
-    st.session_state["slow_flip_max_source"] = slow_flip_max_source
-    market_default_buyer_percent = get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
-    wholesale_model = advanced_wholesale_buyer_model(
-        market=st.session_state.get("repair_market", "Central IL"),
-        arv=float(resolved_arv or 0),
-        repairs=float(st.session_state.get("repairs", 0) or 0),
-        notes=st.session_state.get("notes", ""),
-        repair_notes=st.session_state.get("repair_notes", "") + " " + st.session_state.get("manual_repair_notes", ""),
-        property_type=st.session_state.get("property_type", ""),
-        days_on_market=int(st.session_state.get("days_on_market", 0) or 0),
-        buyer_demand_confidence=st.session_state.get("buyer_demand_confidence", "Medium"),
-        market_type=st.session_state.get("market_type", "Auto"),
-        occupancy=st.session_state.get("occupancy", "Unknown"),
-        livable=st.session_state.get("livable", "Unknown"),
-        exit_confidence=st.session_state.get("exit_strategy_confidence", "Unknown"),
-    )
-    final_wholesale_buyer_percent = wholesale_model["buyer_percent"]
-    if manual_wholesale_override:
-        final_wholesale_buyer_percent = float(wholesale_buyer_percent_arv)
-    wholesale_buyer_percent_source = "Manual Override" if manual_wholesale_override else "Market Default"
-
-    assumptions = Assumptions(
-        min_assignment_fee=float(min_assignment_fee),
-        exception_assignment_fee=float(exception_assignment_fee),
-        slow_flip_rent_multiple=float(slow_flip_rent_multiple),
-        close_title_buffer=float(close_title_buffer),
-        target_offer_discount=float(target_offer_discount),
-        wholesale_buyer_percent_arv=float(final_wholesale_buyer_percent),
-        wholesale_buyer_percent_source=wholesale_buyer_percent_source,
-        wholesale_buyer_percent_range=wholesale_model.get("range", ""),
-        wholesale_buyer_percent_reason=wholesale_model.get("reason_text", ""),
-        market_liquidity_tier=wholesale_model.get("tier", ""),
-        market_wholesale_buyer_percent=float(market_default_buyer_percent),
-        slow_flip_max_offer_cap=float(slow_flip_max_offer_cap),
-        slow_flip_first_offer_gap=float(slow_flip_first_offer_gap),
-        slow_flip_lead_search_max=float(slow_flip_lead_search_max),
-        slow_flip_lead_search_source="Market Default",
-        above_slow_flip_lead_search_range=bool(slow_flip_lead_search_max > 0 and analysis_price > slow_flip_lead_search_max),
-        inside_slow_flip_lead_search_range=bool(slow_flip_lead_search_max > 0 and analysis_price <= slow_flip_lead_search_max),
-        slow_flip_max_buy_price=float(slow_flip_max_buy_price),
-        slow_flip_max_source=slow_flip_max_source,
-        above_slow_flip_max_buy_price=bool(slow_flip_max_buy_price > 0 and analysis_price > slow_flip_max_buy_price),
-    )
-
-    analysis_notes = "\n".join(
-        part
-        for part in [
-            st.session_state.get("notes", ""),
-            st.session_state.get("repair_notes", ""),
-            st.session_state.get("manual_repair_notes", ""),
-        ]
-        if str(part or "").strip()
-    )
-
-    deal = DealInput(
-        address=st.session_state["address"],
-        market=st.session_state["market"],
-        lead_type=st.session_state["lead_type"],
-        exit_mode=exit_mode,
-        asking_price=analysis_price,
-        rent=float(st.session_state["rent"]),
-        beds=float(st.session_state["beds"]),
-        baths=float(st.session_state["baths"]),
-        sqft=float(st.session_state["sqft"]),
-        taxes=float(st.session_state["taxes"]),
-        status=st.session_state["status"],
-        occupancy=st.session_state["occupancy"],
-        livable=st.session_state["livable"],
-        days_on_market=int(st.session_state["days_on_market"]),
-        notes=analysis_notes,
-        arv=float(resolved_arv or 0),
-        repairs=float(st.session_state.get("repairs", 0) or 0),
-    )
-
-    result = analyze_deal(deal, assumptions)
-    best = result["best"]
-
-    st.divider()
-    final_summary = render_final_decision_box(
-        result=result,
-        deal=deal,
-        value_source=value_source,
-        uploaded_files=uploaded_repair_files,
-        repair_notes=st.session_state.get("repair_notes", ""),
-        assumptions=assumptions,
-    )
-    repair_breakdown = build_repair_breakdown()
-    render_repair_estimate_breakdown(repair_breakdown)
-    deal_log_row = build_deal_log_row(
-        result=result,
-        deal=deal,
-        final_summary=final_summary,
-        value_source=value_source,
-        asking_price=asking_price_value,
-        contract_price=contract_price_value,
-    )
-    render_save_deal_analysis(deal_log_row)
-
-    st.divider()
-    st.subheader("Decision")
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Deal Grade", result["grade"])
-    m2.metric("Best Exit", result["best_exit"])
-    m3.metric("First Offer", money(best.get("offer_to_send", best.get("target_offer_low", 0))))
-    m4.metric("Internal Max", money(best["max_offer"]))
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Slow Flip Numbers")
-        slow = result["slow_flip"]
-        st.write({
-            "Resale to slow flipper": money(slow["resale_to_slow_flipper"]),
-            "First offer to send": money(slow.get("offer_to_send", 0)),
-            "Internal max offer": money(slow["max_offer"]),
-            "Rent formula max before cap": money(slow.get("rent_formula_max_offer_before_cap", 0)),
-            "Normal slow flip cap": money(slow.get("normal_slow_flip_cap", 0)),
-            "Slow Flip Lead Search Max": money(slow_flip_lead_search_max) if slow_flip_lead_search_max > 0 else "Not set",
-            "Slow Flip Max Buy Price": money(slow.get("slow_flip_max_buy_price", 0)) if slow.get("slow_flip_max_buy_price", 0) > 0 else "Not set",
-            "Slow Flip Max Source": slow.get("slow_flip_max_source", ""),
-            "Above Slow Flip Max Buy Price?": "Yes" if slow.get("above_slow_flip_max_buy_price") else "No",
-            "Estimated fee at buy price": money(slow["estimated_fee_at_ask"]),
-        })
-        slow_resale_value = float(slow.get("resale_to_slow_flipper", 0) or 0)
-        buyer_payment_support = float(st.session_state.get("rent", 0) or 0)
-        annual_taxes_value = float(st.session_state.get("taxes", 0) or 0)
-
-        if slow_resale_value >= 50000 and (buyer_payment_support < 1200 or annual_taxes_value > 1500):
-            st.warning("$50k+ slow-flip resale warning: still show the resale price, but only push it hard if buyer payment support is about $1,200/month and taxes are low enough.")
-    with c2:
-        st.subheader("Value / Wholesale Reference")
-        wholesale = result["wholesale"]
-        st.write({
-        "ARV / estimated value": money(resolved_arv),
-        "Value Source": value_source,
-        "Repairs": money(st.session_state.get("repairs", 0)),
-        "Wholesale Buyer % Source": wholesale.get("buyer_percent_source", ""),
-        "Market buyer % of ARV used": percent_label(wholesale.get("buyer_percent_arv", 0)),
-        "Buyer % Range": wholesale.get("buyer_percent_range", ""),
-        "Market Liquidity Tier": wholesale.get("market_liquidity_tier", ""),
-        "Buyer % Reason": wholesale.get("buyer_percent_reason", ""),
-        "Conservative buyer target": money(wholesale.get("conservative_buyer_target", 0)),
-        "Aggressive buyer target": money(wholesale.get("aggressive_buyer_target", 0)),
-        "Buyer target": money(wholesale["buyer_target"]),
-        "Wholesale max offer": money(wholesale["max_offer"]),
-        "Wholesale estimated fee at buy price": money(wholesale["estimated_fee_at_ask"])
-        })
-
-    st.subheader("Risk Notes")
-    for risk in result["risks"]:
-        st.warning(safe_condition_text(risk))
-
-    st.subheader("Suggested Message")
-    st.text_area("Copy/paste message", result["suggested_message"], height=180)
-
-    with st.expander("AI Summary - optional if OpenAI key is added"):
-        ai_summary = build_ai_summary(result)
-        if ai_summary:
-            st.write(ai_summary)
-        else:
-            st.info("No OpenAI key found. Add OPENAI_API_KEY in Streamlit secrets later to enable this section.")
-
-    with st.expander("Download Analysis CSV"):
-        row = {
-            **deal_log_row,
-            "grade": result["grade"],
-            "final_decision": final_summary["final_decision"],
-            "team_action": final_summary["team_action"],
-            "missing_info": "; ".join(final_summary["missing_info"]),
-            "risk_flags": "; ".join(final_summary["risk_flags"]),
-            "decision_reason": final_summary["decision_reason"],
-            "exit_mode": exit_mode,
-            "internal_max_offer": best["max_offer"],
-            "estimated_fee_at_ask": best["estimated_fee_at_ask"],
-            "livable": st.session_state["livable"],
-            "occupancy": st.session_state["occupancy"],
-        }
-        df = pd.DataFrame([row])
-        st.dataframe(df, use_container_width=True)
-        st.download_button(
-            "Download CSV",
-            data=df.to_csv(index=False),
-            file_name="offer_engine_analysis.csv",
-            mime="text/csv",
-        )
-else:
-    st.info("Enter or pull the property data, then click Analyze Deal.")
+render_deal_protection_section(st, ui_context)
+render_buyer_demand_section(st, EXIT_OBSTACLE_OPTIONS)
+render_buyer_outreach_section(st, BUYER_CONCERN_OPTIONS)
+uploaded_repair_files = render_repair_section(st, ui_context)
+render_decision_section(st, ui_context, exit_mode, uploaded_repair_files)
