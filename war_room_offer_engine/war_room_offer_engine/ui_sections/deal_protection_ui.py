@@ -13,6 +13,20 @@ def render_deal_protection_section(st, ui) -> dict:
     listing_options = ["Hide listing/source links", "Internal only", "Full links allowed"]
     message_options = ["Pre-contract demand check", "Under-contract buyer blast", "Internal team only"]
 
+    st.session_state.setdefault("contract_status", "Not under contract")
+    st.session_state.setdefault("deal_protection_mode", "Yes")
+    st.session_state.setdefault(
+        "address_sharing_level",
+        default_address_sharing_level(st.session_state.get("contract_status", "Not under contract")),
+    )
+    st.session_state.setdefault(
+        "listing_source_sharing_level",
+        default_listing_source_sharing_level(st.session_state.get("contract_status", "Not under contract")),
+    )
+    st.session_state.setdefault("buyer_message_type", "Pre-contract demand check")
+    st.session_state.setdefault("buyer_deadline", "")
+    st.session_state.setdefault("buyer_access_notes", "")
+
     previous_status = st.session_state.get("_last_contract_status_for_defaults")
     current_status = st.session_state.get("contract_status", "Not under contract")
     if previous_status != current_status:
@@ -66,8 +80,17 @@ def render_deal_protection_section(st, ui) -> dict:
         "mold_verified": st.session_state.get("mold_verified") in ["Yes - inspector verified", "Yes - seller disclosed"],
     }
     payload = build_deal_protection_payload(context)
-    for key, value in payload.items():
-        st.session_state[key if key != "warning" else "deal_protection_warning"] = value
+    output_keys = {
+        "pre_contract_teaser_message",
+        "under_contract_buyer_blast",
+        "protected_buyer_message",
+        "exact_address_shared",
+        "protected_fields_hidden",
+        "buyer_message_allowed",
+    }
+    for key in output_keys:
+        st.session_state[key] = payload.get(key, [] if key == "protected_fields_hidden" else "")
+    st.session_state["deal_protection_warning"] = payload.get("warning", "")
 
     st.markdown("### Protected Buyer Message")
     with st.container(border=True):
