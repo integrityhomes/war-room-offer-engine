@@ -8,15 +8,15 @@ import pandas as pd
 import requests
 
 try:
-    from apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+    from apify_connector import fetch_dataset_items, normalize_zillow_record, parse_apify_dataset_id, preview_rows, run_actor_for_items
 except ImportError:
     try:
-        from .apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+        from .apify_connector import fetch_dataset_items, normalize_zillow_record, parse_apify_dataset_id, preview_rows, run_actor_for_items
     except ImportError:
         try:
-            from war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+            from war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, parse_apify_dataset_id, preview_rows, run_actor_for_items
         except ImportError:
-            from war_room_offer_engine.war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+            from war_room_offer_engine.war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, parse_apify_dataset_id, preview_rows, run_actor_for_items
 
 try:
     from sold_comps import normalize_sold_comps, parse_comp_text
@@ -205,7 +205,8 @@ def get_listing_details(url_or_text: str) -> dict[str, Any]:
 
 def fetch_apify_zillow_dataset(dataset_id: str, limit: int = 50) -> dict[str, Any]:
     token = get_secret("APIFY_TOKEN", "") or get_secret("APIFY_API_TOKEN", "")
-    return fetch_dataset_items(dataset_id=dataset_id, token=token, limit=limit)
+    parsed_dataset_id = parse_apify_dataset_id(dataset_id)
+    return fetch_dataset_items(dataset_id=parsed_dataset_id, token=token, limit=limit)
 
 
 def run_apify_zillow_actor(actor_id: str, actor_input: dict[str, Any] | None = None, limit: int = 50) -> dict[str, Any]:
