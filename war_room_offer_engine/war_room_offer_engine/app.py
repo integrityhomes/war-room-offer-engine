@@ -66,6 +66,7 @@ try:
         provider_connection_status,
         fetch_apify_zillow_dataset,
         run_apify_zillow_actor,
+        parse_apify_dataset_id,
         get_sold_comps,
         sold_comps_from_apify_rows,
         sold_comps_from_csv_rows,
@@ -81,6 +82,7 @@ except ImportError:
             provider_connection_status,
             fetch_apify_zillow_dataset,
             run_apify_zillow_actor,
+            parse_apify_dataset_id,
             get_sold_comps,
             sold_comps_from_apify_rows,
             sold_comps_from_csv_rows,
@@ -96,6 +98,7 @@ except ImportError:
                 provider_connection_status,
                 fetch_apify_zillow_dataset,
                 run_apify_zillow_actor,
+                parse_apify_dataset_id,
                 get_sold_comps,
                 sold_comps_from_apify_rows,
                 sold_comps_from_csv_rows,
@@ -110,6 +113,7 @@ except ImportError:
                 provider_connection_status,
                 fetch_apify_zillow_dataset,
                 run_apify_zillow_actor,
+                parse_apify_dataset_id,
                 get_sold_comps,
                 sold_comps_from_apify_rows,
                 sold_comps_from_csv_rows,
@@ -279,6 +283,17 @@ FIELD_DEFAULTS = {
     "apify_imported_at": "",
     "apify_source": "",
     "apify_zpid": "",
+    "imported_from_apify": "No",
+    "imported_lead_id": "",
+    "imported_listing_url": "",
+    "imported_agent_name": "",
+    "imported_agent_phone": "",
+    "imported_agent_email": "",
+    "imported_days_on_market": 0,
+    "imported_listing_status": "",
+    "imported_missing_fields": [],
+    "field_source_map_json": "{}",
+    "apify_source_confidence": "",
     "apify_duplicate_count": 0,
     "apify_field_sources": {},
     "apify_imported_fields": [],
@@ -1276,48 +1291,95 @@ def can_import_over_state_field(state_key: str) -> bool:
     return current_value in [None, "", 0, 0.0, "Unknown", default_value]
 
 
+APIFY_IMPORT_MAPPING = {
+    "address": "address",
+    "city": "city",
+    "state": "state",
+    "zip": "zip",
+    "asking_price": "asking_price",
+    "rent": "rent",
+    "arv": "sheet_arv",
+    "tax_assessed_value": "tax_assessed_value",
+    "taxes": "taxes",
+    "last_sale_date": "last_sale_date",
+    "last_sale_price": "last_sale_price",
+    "beds": "beds",
+    "baths": "baths",
+    "sqft": "sqft",
+    "lot_size": "lot_size",
+    "year_built": "year_built",
+    "property_type": "property_type",
+    "days_on_market": "days_on_market",
+    "status": "status",
+    "listing_url": "listing_url",
+    "listing_agent_name": "listing_agent_name",
+    "listing_agent_phone": "listing_agent_phone",
+    "listing_agent_email": "listing_agent_email",
+    "listing_brokerage": "listing_brokerage",
+}
+
+
+APIFY_REQUIRED_SUMMARY_FIELDS = [
+    "address",
+    "asking_price",
+    "beds",
+    "baths",
+    "sqft",
+    "days_on_market",
+    "listing_agent_name",
+    "listing_url",
+]
+
+
+def apify_missing_fields(data: dict) -> list[str]:
+    missing = []
+    for field in APIFY_REQUIRED_SUMMARY_FIELDS:
+        value = data.get(field)
+        if value in [None, "", 0, 0.0]:
+            missing.append(field)
+    return missing
+
+
 def apply_apify_zillow_import(row: dict) -> tuple[list[str], list[str]]:
     data = row.get("data", {}) if isinstance(row, dict) else {}
     field_sources = row.get("field_sources", {}) if isinstance(row, dict) else {}
-    mapping = {
-        "address": "address",
-        "city": "city",
-        "state": "state",
-        "zip": "zip",
-        "asking_price": "asking_price",
-        "rent": "rent",
-        "arv": "sheet_arv",
-        "beds": "beds",
-        "baths": "baths",
-        "sqft": "sqft",
-        "lot_size": "lot_size",
-        "year_built": "year_built",
-        "property_type": "property_type",
-        "days_on_market": "days_on_market",
-        "status": "status",
-        "listing_url": "listing_url",
-        "listing_agent_name": "listing_agent_name",
-        "listing_agent_phone": "listing_agent_phone",
-        "listing_agent_email": "listing_agent_email",
-        "listing_brokerage": "listing_brokerage",
-    }
     imported = []
     skipped = []
+    source_map = dict(st.session_state.get("apify_field_sources", {}) or {})
 
-    for source_key, state_key in mapping.items():
+    for source_key, state_key in APIFY_IMPORT_MAPPING.items():
         value = data.get(source_key)
         if value in [None, "", 0, 0.0]:
             continue
         if not can_import_over_state_field(state_key):
             skipped.append(state_key)
             continue
-        if state_key in ["asking_price", "rent", "sqft", "days_on_market", "sheet_arv", "year_built"]:
+        if state_key in [
+            "asking_price",
+            "rent",
+            "sqft",
+            "days_on_market",
+            "sheet_arv",
+            "year_built",
+            "tax_assessed_value",
+            "taxes",
+            "last_sale_price",
+        ]:
             st.session_state[state_key] = int(float(value))
         elif state_key in ["beds", "baths"]:
             st.session_state[state_key] = float(value)
         else:
             st.session_state[state_key] = str(value)
         imported.append(state_key)
+        source_map[state_key] = {
+            "label": "Imported from Apify/Zillow",
+            "source_field": field_sources.get(source_key, source_key),
+        }
+
+    if data.get("city") and data.get("state") and can_import_over_state_field("market"):
+        st.session_state["market"] = f"{data.get('city')} {data.get('state')}".strip()
+        imported.append("market")
+        source_map["market"] = {"label": "Imported from Apify/Zillow", "source_field": "city/state"}
 
     if data.get("zpid"):
         st.session_state["apify_zpid"] = str(data.get("zpid"))
@@ -1325,9 +1387,20 @@ def apply_apify_zillow_import(row: dict) -> tuple[list[str], list[str]]:
     st.session_state["apify_source"] = row.get("source", "Apify Zillow")
     st.session_state["apify_import_status"] = "Imported"
     st.session_state["apify_imported_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    st.session_state["apify_field_sources"] = field_sources
+    st.session_state["apify_field_sources"] = source_map
     st.session_state["apify_imported_fields"] = imported
     st.session_state["apify_skipped_manual_fields"] = skipped
+    st.session_state["imported_from_apify"] = "Yes"
+    st.session_state["imported_lead_id"] = str(data.get("zpid") or row.get("duplicate_key") or data.get("address", ""))
+    st.session_state["imported_listing_url"] = data.get("listing_url", "")
+    st.session_state["imported_agent_name"] = data.get("listing_agent_name", "")
+    st.session_state["imported_agent_phone"] = data.get("listing_agent_phone", "")
+    st.session_state["imported_agent_email"] = data.get("listing_agent_email", "")
+    st.session_state["imported_days_on_market"] = int(safe_float(data.get("days_on_market", 0)))
+    st.session_state["imported_listing_status"] = data.get("status", "")
+    st.session_state["imported_missing_fields"] = apify_missing_fields(data)
+    st.session_state["field_source_map_json"] = json.dumps(source_map)
+    st.session_state["apify_source_confidence"] = data.get("source_confidence", row.get("source", "Apify/Zillow"))
     st.session_state["data_intake_source"] = "Zillow / Apify"
     st.session_state["lead_source"] = "Zillow / Apify"
 
@@ -1335,6 +1408,68 @@ def apply_apify_zillow_import(row: dict) -> tuple[list[str], list[str]]:
     st.session_state["arv"] = int(resolved_arv) if resolved_arv > 0 else 0
     st.session_state["value_source"] = value_source
     return imported, skipped
+
+
+def build_imported_lead_summary(row: dict | None = None) -> dict:
+    data = row.get("data", {}) if isinstance(row, dict) else {}
+    if not data:
+        data = {
+            "address": st.session_state.get("address", ""),
+            "asking_price": st.session_state.get("asking_price", 0),
+            "beds": st.session_state.get("beds", 0),
+            "baths": st.session_state.get("baths", 0),
+            "sqft": st.session_state.get("sqft", 0),
+            "days_on_market": st.session_state.get("days_on_market", 0),
+            "listing_agent_name": st.session_state.get("listing_agent_name", ""),
+            "listing_url": st.session_state.get("listing_url", ""),
+        }
+    missing = apify_missing_fields(data)
+    return {
+        "Address": data.get("address", ""),
+        "Price": money(data.get("asking_price", 0)),
+        "Beds/Baths": f"{data.get('beds', '')}/{data.get('baths', '')}",
+        "Sqft": data.get("sqft", ""),
+        "DOM": data.get("days_on_market", ""),
+        "Agent": data.get("listing_agent_name", ""),
+        "Listing URL": data.get("listing_url", ""),
+        "Missing fields": ", ".join(missing) if missing else "None",
+        "Fields imported successfully": ", ".join(st.session_state.get("apify_imported_fields", [])),
+    }
+
+
+def apify_lead_option_label(row: dict, idx: int) -> str:
+    data = row.get("data", {}) if isinstance(row, dict) else {}
+    address = data.get("address", "Unknown address")
+    price = money(data.get("asking_price", 0))
+    beds = data.get("beds", "")
+    baths = data.get("baths", "")
+    return f"{idx}: {address} | {price} | {beds}/{baths}"
+
+
+def render_imported_lead_summary(row: dict | None = None) -> None:
+    summary = build_imported_lead_summary(row)
+    st.markdown("#### Imported Lead Summary")
+    st.dataframe(pd.DataFrame([summary]), use_container_width=True)
+    source_map = st.session_state.get("apify_field_sources", {}) or {}
+    if source_map:
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "field": field,
+                        "source label": info.get("label", "Imported from Apify/Zillow") if isinstance(info, dict) else "Imported from Apify/Zillow",
+                        "source field": info.get("source_field", "") if isinstance(info, dict) else str(info),
+                    }
+                    for field, info in source_map.items()
+                ]
+            ),
+            use_container_width=True,
+        )
+    missing = summary.get("Missing fields", "")
+    if missing and missing != "None":
+        st.warning("Needs manual entry: " + missing)
+    if st.session_state.get("apify_import_status") == "Imported":
+        st.success("Lead imported. Review all fields before analyzing.")
 
 
 def build_missing_info(deal: DealInput, uploaded_files, repair_notes: str) -> list[str]:
@@ -2121,6 +2256,16 @@ def build_deal_log_row(
         "apify_skipped_manual_fields": "; ".join(st.session_state.get("apify_skipped_manual_fields", [])),
         "apify_field_sources_json": json.dumps(st.session_state.get("apify_field_sources", {})),
         "apify_last_error": st.session_state.get("apify_last_error", ""),
+        "imported_from_apify": st.session_state.get("imported_from_apify", "No"),
+        "imported_lead_id": st.session_state.get("imported_lead_id", ""),
+        "imported_listing_url": st.session_state.get("imported_listing_url", st.session_state.get("listing_url", "")),
+        "imported_agent_name": st.session_state.get("imported_agent_name", st.session_state.get("listing_agent_name", "")),
+        "imported_agent_phone": st.session_state.get("imported_agent_phone", st.session_state.get("listing_agent_phone", "")),
+        "imported_agent_email": st.session_state.get("imported_agent_email", st.session_state.get("listing_agent_email", "")),
+        "imported_days_on_market": st.session_state.get("imported_days_on_market", st.session_state.get("days_on_market", 0)),
+        "imported_listing_status": st.session_state.get("imported_listing_status", st.session_state.get("status", "")),
+        "imported_missing_fields": "; ".join(st.session_state.get("imported_missing_fields", []) or []),
+        "field_source_map_json": st.session_state.get("field_source_map_json", json.dumps(st.session_state.get("apify_field_sources", {}))),
         "listing_agent_name": st.session_state.get("listing_agent_name", ""),
         "listing_agent_phone": st.session_state.get("listing_agent_phone", ""),
         "listing_agent_email": st.session_state.get("listing_agent_email", ""),
@@ -2220,6 +2365,77 @@ with source_col2:
         key="lead_source",
     )
 
+st.subheader("Auto-Fill Lead From Apify/Zillow")
+with st.container(border=True):
+    status_text = "Connected" if get_secret("APIFY_TOKEN") or get_secret("APIFY_API_TOKEN") else "Not connected - manual entry still works"
+    st.info(f"Apify connection status: {status_text}")
+    af1, af2 = st.columns([2, 1])
+    with af1:
+        st.text_input("Dataset ID or Dataset URL", key="apify_autofill_dataset_id")
+    with af2:
+        st.number_input("Lead preview limit", min_value=1, max_value=200, value=25, step=5, key="apify_autofill_preview_limit")
+        pull_apify_autofill = st.button("Pull leads", type="secondary", use_container_width=True)
+
+    if pull_apify_autofill:
+        dataset_id = parse_apify_dataset_id(st.session_state.get("apify_autofill_dataset_id", ""))
+        st.session_state["apify_dataset_id"] = dataset_id
+        result = fetch_apify_zillow_dataset(
+            dataset_id=dataset_id,
+            limit=int(st.session_state.get("apify_autofill_preview_limit", 25) or 25),
+        )
+        st.session_state["apify_last_error"] = result.get("error", "")
+        rows = result.get("rows", []) if result.get("ok") else []
+        for row in rows:
+            row["source"] = result.get("source", "Apify Zillow Dataset")
+        st.session_state["apify_zillow_preview"] = rows
+        st.session_state["apify_zillow_duplicates"] = result.get("duplicates", [])
+        st.session_state["apify_duplicate_count"] = len(result.get("duplicates", []))
+        if result.get("ok"):
+            st.success(f"Loaded {len(rows)} clean lead record(s).")
+        else:
+            st.error(result.get("error", "Could not load Apify/Zillow dataset."))
+
+    if st.session_state.get("apify_duplicate_count", 0):
+        st.warning(f"Duplicate-address protection found {st.session_state['apify_duplicate_count']} duplicate record(s). Showing one clean record per address.")
+
+    autofill_rows = st.session_state.get("apify_zillow_preview", [])
+    if autofill_rows:
+        preview_table = []
+        for idx, row in enumerate(autofill_rows):
+            data = row.get("data", {})
+            preview_table.append(
+                {
+                    "lead": idx,
+                    "address": data.get("address", ""),
+                    "price": data.get("asking_price", 0),
+                    "beds": data.get("beds", ""),
+                    "baths": data.get("baths", ""),
+                    "sqft": data.get("sqft", ""),
+                    "dom": data.get("days_on_market", ""),
+                    "agent": data.get("listing_agent_name", ""),
+                    "url": data.get("listing_url", ""),
+                    "missing": ", ".join(apify_missing_fields(data)) or "None",
+                }
+            )
+        st.markdown("#### Preview leads")
+        st.dataframe(pd.DataFrame(preview_table), use_container_width=True)
+        lead_labels = [apify_lead_option_label(row, idx) for idx, row in enumerate(autofill_rows)]
+        selected_label = st.selectbox("Select lead", lead_labels, key="apify_autofill_selected_label")
+        selected_idx = lead_labels.index(selected_label) if selected_label in lead_labels else 0
+        selected_row = autofill_rows[selected_idx]
+        if st.button("Import selected lead into analyzer", type="primary"):
+            if selected_row.get("errors"):
+                st.error("Cannot import row: " + "; ".join(selected_row.get("errors", [])))
+            else:
+                imported, skipped = apply_apify_zillow_import(selected_row)
+                st.success("Lead imported. Review all fields before analyzing.")
+                st.caption("Imported fields: " + (", ".join(imported) if imported else "none"))
+                if skipped:
+                    st.info("Manual override kept for: " + ", ".join(skipped))
+        render_imported_lead_summary(selected_row)
+    elif st.session_state.get("apify_last_error"):
+        st.warning(st.session_state.get("apify_last_error", ""))
+
 with st.expander("Lead Data Intake", expanded=False):
     st.caption("Manual/pasted/vendor intake only. This does not scrape Zillow, Redfin, Realtor.com, or other listing sites.")
     intake_cols = st.columns(3)
@@ -2262,8 +2478,10 @@ with st.expander("Lead Data Intake", expanded=False):
         st.number_input("Preview limit", min_value=1, max_value=200, step=5, key="apify_preview_limit")
 
     if preview_dataset:
+        dataset_id = parse_apify_dataset_id(st.session_state.get("apify_dataset_id", ""))
+        st.session_state["apify_dataset_id"] = dataset_id
         result = fetch_apify_zillow_dataset(
-            dataset_id=st.session_state.get("apify_dataset_id", ""),
+            dataset_id=dataset_id,
             limit=int(st.session_state.get("apify_preview_limit", 25) or 25),
         )
         st.session_state["apify_last_error"] = result.get("error", "")

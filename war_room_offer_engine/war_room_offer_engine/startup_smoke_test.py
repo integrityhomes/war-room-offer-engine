@@ -143,6 +143,7 @@ for function_name in [
     "provider_connection_status",
     "fetch_apify_zillow_dataset",
     "run_apify_zillow_actor",
+    "parse_apify_dataset_id",
     "get_sold_comps",
     "sold_comps_from_apify_rows",
 ]:
@@ -172,6 +173,9 @@ missing_price = apify_connector.normalize_zillow_record({key: value for key, val
 check("Missing price" in missing_price.get("errors", []), "Apify/Zillow missing price is a clear error")
 deduped = apify_connector.normalize_zillow_records([fake_zillow_record, dict(fake_zillow_record)])
 check(len(deduped.get("rows", [])) == 1 and len(deduped.get("duplicates", [])) == 1, "Apify/Zillow duplicate-address protection works")
+check(data_sources.parse_apify_dataset_id("https://console.apify.com/storage/datasets/abc123/items") == "abc123", "Apify dataset URL parses to dataset id")
+missing_token_result = data_sources.fetch_apify_zillow_dataset(dataset_id="", limit=1)
+check(not missing_token_result.get("ok"), "missing Apify token or dataset does not crash")
 
 fake_comp_rows = [
     {
@@ -277,6 +281,66 @@ check(hasattr(app, "build_repair_breakdown"), "app repair breakdown function imp
 check(hasattr(app, "build_exit_strategy_confidence"), "app exit confidence function imports")
 check(hasattr(app, "build_dispo_test_summary"), "app dispo test summary function imports")
 check(hasattr(app, "generate_buyer_blast_messages"), "app buyer blast generator imports")
+check(hasattr(app, "apply_apify_zillow_import"), "app Apify import function imports")
+
+for field in [
+    "address",
+    "city",
+    "state",
+    "zip",
+    "market",
+    "asking_price",
+    "rent",
+    "sheet_arv",
+    "beds",
+    "baths",
+    "sqft",
+    "lot_size",
+    "year_built",
+    "property_type",
+    "days_on_market",
+    "status",
+    "listing_url",
+    "listing_agent_name",
+    "listing_agent_phone",
+    "listing_agent_email",
+    "listing_brokerage",
+    "tax_assessed_value",
+    "taxes",
+    "last_sale_date",
+    "last_sale_price",
+]:
+    app.st.session_state[field] = app.FIELD_DEFAULTS.get(field, "" if field not in ["asking_price", "rent", "sheet_arv", "beds", "baths", "sqft"] else 0)
+
+rich_zillow_record = dict(
+    fake_zillow_record,
+    rentZestimate=1100,
+    zestimate=150000,
+    taxAssessedValue=90000,
+    annualTaxes=1800,
+    lastSoldDate="2025-01-15",
+    lastSoldPrice=70000,
+    agentName="Casey Agent",
+    agentPhone="555-111-2222",
+    agentEmail="casey@example.com",
+    brokerageName="Test Brokerage",
+    lotAreaString="0.25 acres",
+    yearBuilt=1950,
+    homeType="Single Family",
+    sourceConfidence="High",
+)
+rich_row = apify_connector.normalize_zillow_record(rich_zillow_record)
+rich_row["source"] = "Apify Zillow Dataset"
+imported_fields, skipped_fields = app.apply_apify_zillow_import(rich_row)
+check("address" in imported_fields and app.st.session_state["address"].startswith("123 Main St"), "fake Apify record imports address into app field")
+check(app.st.session_state["asking_price"] == 85000, "fake Apify record imports asking price into app field")
+check(app.st.session_state["listing_agent_name"] == "Casey Agent", "fake Apify record imports agent into app field")
+check(app.st.session_state["field_source_map_json"], "Apify import stores field source map json")
+
+manual_row = apify_connector.normalize_zillow_record(dict(rich_zillow_record, bedrooms=3))
+app.st.session_state["beds"] = 2
+manual_imported, manual_skipped = app.apply_apify_zillow_import(manual_row)
+check(app.st.session_state["beds"] == 2 and "beds" in manual_skipped, "manual override wins after Apify import")
 
 
 def set_exit_inputs(
