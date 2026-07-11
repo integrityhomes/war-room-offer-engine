@@ -172,6 +172,15 @@ missing_price = apify_connector.normalize_zillow_record({key: value for key, val
 check("Missing price" in missing_price.get("errors", []), "Apify/Zillow missing price is a clear error")
 deduped = apify_connector.normalize_zillow_records([fake_zillow_record, dict(fake_zillow_record)])
 check(len(deduped.get("rows", [])) == 1 and len(deduped.get("duplicates", [])) == 1, "Apify/Zillow duplicate-address protection works")
+check(
+    apify_connector.parse_apify_dataset_id("https://api.apify.com/v2/datasets/abc123/items?clean=true") == "abc123",
+    "Apify/Zillow dataset URL parses to dataset id",
+)
+missing_token_result = apify_connector.fetch_dataset_items("abc123", token="", limit=1)
+check(
+    not missing_token_result.get("ok") and "Missing Apify token" in missing_token_result.get("error", ""),
+    "Apify/Zillow missing token fails safely",
+)
 
 fake_comp_rows = [
     {
@@ -277,6 +286,16 @@ check(hasattr(app, "build_repair_breakdown"), "app repair breakdown function imp
 check(hasattr(app, "build_exit_strategy_confidence"), "app exit confidence function imports")
 check(hasattr(app, "build_dispo_test_summary"), "app dispo test summary function imports")
 check(hasattr(app, "generate_buyer_blast_messages"), "app buyer blast generator imports")
+check(hasattr(app, "apply_apify_zillow_import"), "app Apify/Zillow import function imports")
+
+app.st.session_state["asking_price"] = 99000
+app.st.session_state["rent"] = app.FIELD_DEFAULTS["rent"]
+app.st.session_state["address"] = ""
+app.st.session_state["sheet_arv"] = 0
+imported_fields, skipped_fields = app.apply_apify_zillow_import(normalized)
+check("asking_price" in skipped_fields, "manual override wins during Apify/Zillow import")
+check("address" in imported_fields and "rent" not in skipped_fields, "Apify/Zillow import fills blank/default lead fields")
+check(app.st.session_state["apify_field_sources"].get("asking_price") == "price", "Apify/Zillow import stores field source map")
 
 
 def set_exit_inputs(
