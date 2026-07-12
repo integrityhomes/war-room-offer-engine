@@ -8,15 +8,15 @@ import pandas as pd
 import requests
 
 try:
-    from apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+    from apify_connector import fetch_dataset_items, normalize_zillow_record, parse_apify_dataset_id, preview_rows, run_actor_for_items
 except ImportError:
     try:
-        from .apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+        from .apify_connector import fetch_dataset_items, normalize_zillow_record, parse_apify_dataset_id, preview_rows, run_actor_for_items
     except ImportError:
         try:
-            from war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+            from war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, parse_apify_dataset_id, preview_rows, run_actor_for_items
         except ImportError:
-            from war_room_offer_engine.war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, preview_rows, run_actor_for_items
+            from war_room_offer_engine.war_room_offer_engine.apify_connector import fetch_dataset_items, normalize_zillow_record, parse_apify_dataset_id, preview_rows, run_actor_for_items
 
 try:
     from sold_comps import normalize_sold_comps, parse_comp_text
@@ -147,7 +147,167 @@ def parse_listing_text(text: str) -> dict[str, Any]:
     if year_match:
         parsed["year_built"] = year_match.group(1)
 
+    city_state_zip = re.search(
+        r"\b([A-Za-z .'-]+),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b",
+        compact,
+    )
+    if city_state_zip:
+        parsed["city"] = city_state_zip.group(1).strip()
+        parsed["state"] = city_state_zip.group(2).strip()
+        parsed["zip"] = city_state_zip.group(3).strip()
+
+    status_match = re.search(r"(?:status|listing status)[:\s]+(active|pending|sold|off.market|coming soon)", compact, re.IGNORECASE)
+    if status_match:
+        parsed["listing_status"] = status_match.group(1).replace("-", " ").title()
+
+    property_type_match = re.search(r"(?:property type|home type|type)[:\s]+([A-Za-z /-]+?)(?:\.|,| beds?| baths?| sqft|$)", compact, re.IGNORECASE)
+    if property_type_match:
+        parsed["property_type"] = property_type_match.group(1).strip()
+
+    lot_match = re.search(r"(?:lot size|lot)[:\s]+([\d,.]+\s*(?:acres?|sq\.?\s*ft|sqft))", compact, re.IGNORECASE)
+    if lot_match:
+        parsed["lot_size"] = lot_match.group(1).strip()
+
+    agent_match = re.search(r"(?:listing agent|agent|listed by)[:\s]+([A-Za-z .'-]{3,80})", compact, re.IGNORECASE)
+    if agent_match:
+        parsed["agent_name"] = agent_match.group(1).strip()
+
+    brokerage_match = re.search(r"(?:brokerage|broker|office)[:\s]+([A-Za-z0-9 &.,'-]{3,100})", compact, re.IGNORECASE)
+    if brokerage_match:
+        parsed["listing_brokerage"] = brokerage_match.group(1).strip()
+
     return parsed
+
+
+def _first_non_empty(*values: Any) -> Any:
+    for value in values:
+        if value not in [None, "", [], {}, 0, 0.0]:
+            return value
+    return ""
+
+
+def normalize_listing_source(source: str, url: str = "") -> str:
+    text = f"{source or ''} {url or ''}".lower()
+    if "zillow" in text:
+        return "Zillow"
+    if "redfin" in text:
+        return "Redfin"
+    if "realtor" in text:
+        return "Realtor.com"
+    if "xleads" in text:
+        return "XLeads"
+    if "county" in text or "tax" in text:
+        return "County / Tax Record"
+    if "apify" in text:
+        return "Apify Dataset"
+    if "agent" in text:
+        return "Agent Sent Listing"
+    if "mls" in text:
+        return "MLS / Manual"
+    return source or "Other"
+
+
+def universal_listing_from_record(record: dict[str, Any], source: str = "", listing_url: str = "") -> dict[str, Any]:
+    record = record or {}
+    data = record.get("data", record) if isinstance(record, dict) else {}
+    if not isinstance(data, dict):
+        data = {}
+    raw_text = " ".join(str(value) for value in data.values() if isinstance(value, (str, int, float)))
+    parsed = parse_listing_text(raw_text)
+    url = _first_non_empty(listing_url, data.get("listing_url"), data.get("url"), data.get("zillow_link"), data.get("detailUrl"))
+    normalized_source = normalize_listing_source(source or data.get("source", ""), str(url))
+    values = {
+        "address": _first_non_empty(data.get("address"), data.get("streetAddress"), parsed.get("address")),
+        "city": _first_non_empty(data.get("city"), parsed.get("city")),
+        "state": _first_non_empty(data.get("state"), parsed.get("state")),
+        "zip": _first_non_empty(data.get("zip"), data.get("zipcode"), data.get("postalCode"), parsed.get("zip")),
+        "market": _first_non_empty(data.get("market"), parsed.get("city")),
+        "property_type": _first_non_empty(data.get("property_type"), data.get("propertyType"), parsed.get("property_type")),
+        "beds": _first_non_empty(data.get("beds"), data.get("bedrooms"), parsed.get("beds")),
+        "baths": _first_non_empty(data.get("baths"), data.get("bathrooms"), parsed.get("baths")),
+        "sqft": _first_non_empty(data.get("sqft"), data.get("livingArea"), parsed.get("sqft")),
+        "lot_size": _first_non_empty(data.get("lot_size"), data.get("lotSize"), parsed.get("lot_size")),
+        "year_built": _first_non_empty(data.get("year_built"), data.get("yearBuilt"), parsed.get("year_built")),
+        "asking_price": _first_non_empty(data.get("asking_price"), data.get("price"), data.get("listPrice"), parsed.get("asking_price")),
+        "status": _first_non_empty(data.get("status"), data.get("listing_status"), parsed.get("listing_status")),
+        "days_on_market": _first_non_empty(data.get("days_on_market"), data.get("daysOnMarket"), data.get("dom"), parsed.get("days_on_market")),
+        "listing_url": url,
+        "listing_agent_name": _first_non_empty(data.get("listing_agent_name"), data.get("agentName"), parsed.get("agent_name")),
+        "listing_agent_phone": _first_non_empty(data.get("listing_agent_phone"), data.get("agentPhone"), parsed.get("agent_phone")),
+        "listing_agent_email": _first_non_empty(data.get("listing_agent_email"), data.get("agentEmail"), parsed.get("agent_email")),
+        "listing_brokerage": _first_non_empty(data.get("listing_brokerage"), data.get("brokerageName"), parsed.get("listing_brokerage")),
+        "sheet_arv": _first_non_empty(data.get("redfin_estimate"), data.get("realtor_estimate"), data.get("zestimate"), data.get("arv"), parsed.get("arv_estimate")),
+        "rent": _first_non_empty(data.get("rent"), data.get("rent_estimate"), parsed.get("rent_estimate")),
+        "tax_assessed_value": _first_non_empty(data.get("tax_assessed_value"), data.get("assessedValue"), parsed.get("tax_assessed_value")),
+        "taxes": _first_non_empty(data.get("taxes"), data.get("annual_taxes"), parsed.get("annual_taxes")),
+        "last_sale_date": _first_non_empty(data.get("last_sale_date"), data.get("lastSoldDate"), parsed.get("last_sale_date")),
+        "last_sale_price": _first_non_empty(data.get("last_sale_price"), data.get("lastSoldPrice"), parsed.get("last_sale_price")),
+    }
+    numeric_fields = {"beds", "baths", "sqft", "asking_price", "days_on_market", "sheet_arv", "rent", "tax_assessed_value", "taxes", "last_sale_price", "year_built"}
+    for key in numeric_fields:
+        if values.get(key) not in ["", None]:
+            number = money_to_float(values.get(key))
+            values[key] = int(number) if number and key not in {"beds", "baths"} else number
+    missing = []
+    for label, key in [
+        ("address", "address"),
+        ("price", "asking_price"),
+        ("beds", "beds"),
+        ("baths", "baths"),
+        ("sqft", "sqft"),
+        ("DOM", "days_on_market"),
+        ("agent", "listing_agent_name"),
+        ("listing URL", "listing_url"),
+    ]:
+        if values.get(key) in ["", 0, 0.0, None]:
+            missing.append(label)
+    conflict_flags = []
+    if values.get("sqft") in ["", 0, 0.0, None]:
+        conflict_flags.append("Sqft missing")
+    if values.get("asking_price") in ["", 0, 0.0, None]:
+        conflict_flags.append("Price missing")
+    if values.get("days_on_market") in ["", 0, 0.0, None]:
+        conflict_flags.append("DOM missing")
+    if not values.get("listing_agent_name"):
+        conflict_flags.append("Agent missing")
+    if not values.get("listing_url"):
+        conflict_flags.append("Listing URL missing")
+    if values.get("sheet_arv") and not data.get("comps"):
+        conflict_flags.append("AVM only, no comps")
+    if not values.get("taxes") and not values.get("tax_assessed_value"):
+        conflict_flags.append("Tax data missing")
+    confidence = "Weak" if normalized_source in ["Agent Sent Listing", "MLS / Manual", "Other"] or not values.get("listing_url") else "Medium"
+    if normalized_source in ["Zillow", "Redfin", "Realtor.com", "Apify Dataset"] and len(missing) <= 2:
+        confidence = "Strong" if record.get("ok", True) and not record.get("errors") else "Medium"
+    field_sources = {key: normalized_source for key, value in values.items() if value not in ["", 0, 0.0, None]}
+    return {
+        "ok": bool(values.get("address") or values.get("listing_url") or values.get("asking_price")),
+        "source": normalized_source,
+        "data": values,
+        "missing_fields": missing,
+        "conflict_flags": conflict_flags,
+        "source_confidence": confidence,
+        "manual_review_needed": "Yes" if missing or conflict_flags or confidence in ["Weak", "Medium"] else "No",
+        "field_sources": field_sources,
+        "warnings": record.get("warnings", []) if isinstance(record, dict) else [],
+        "errors": record.get("errors", []) if isinstance(record, dict) else [],
+    }
+
+
+def parse_universal_listing_text(source: str, listing_url: str, text: str) -> dict[str, Any]:
+    return universal_listing_from_record(parse_listing_text(text or listing_url), source=source, listing_url=listing_url)
+
+
+def fetch_universal_apify_dataset(dataset_id: str, source: str = "Apify Dataset", limit: int = 25) -> dict[str, Any]:
+    result = fetch_apify_zillow_dataset(dataset_id, limit=limit)
+    rows = [universal_listing_from_record(row, source=source) for row in result.get("rows", [])]
+    return {**result, "rows": rows}
+
+
+def run_universal_apify_actor(actor_id: str, listing_url: str, source: str = "Apify Dataset", limit: int = 25) -> dict[str, Any]:
+    result = run_apify_zillow_actor(actor_id, {"url": listing_url, "startUrls": [{"url": listing_url}]}, limit=limit)
+    rows = [universal_listing_from_record(row, source=source, listing_url=listing_url) for row in result.get("rows", [])]
+    return {**result, "rows": rows}
 
 
 def _api_not_connected(provider: str, secret_name: str) -> dict[str, Any]:
@@ -205,25 +365,13 @@ def get_listing_details(url_or_text: str) -> dict[str, Any]:
 
 def fetch_apify_zillow_dataset(dataset_id: str, limit: int = 50) -> dict[str, Any]:
     token = get_secret("APIFY_TOKEN", "") or get_secret("APIFY_API_TOKEN", "")
-    return fetch_dataset_items(dataset_id=dataset_id, token=token, limit=limit)
+    parsed_dataset_id = parse_apify_dataset_id(dataset_id)
+    return fetch_dataset_items(dataset_id=parsed_dataset_id, token=token, limit=limit)
 
 
 def run_apify_zillow_actor(actor_id: str, actor_input: dict[str, Any] | None = None, limit: int = 50) -> dict[str, Any]:
     token = get_secret("APIFY_TOKEN", "") or get_secret("APIFY_API_TOKEN", "")
     return run_actor_for_items(actor_id=actor_id, actor_input=actor_input or {}, token=token, limit=limit)
-
-
-def parse_apify_dataset_id(dataset_id_or_url: str) -> str:
-    text = str(dataset_id_or_url or "").strip()
-    if not text:
-        return ""
-    match = re.search(r"/datasets/([^/?#]+)", text)
-    if match:
-        return match.group(1).strip()
-    match = re.search(r"datasetId=([^&#]+)", text)
-    if match:
-        return match.group(1).strip()
-    return text.rstrip("/").split("/")[-1].strip()
 
 
 def apify_zillow_result_from_record(record: dict[str, Any]) -> dict[str, Any]:
