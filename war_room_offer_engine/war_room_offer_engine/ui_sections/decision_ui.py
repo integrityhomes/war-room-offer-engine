@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+try:
+    from ui_sections.greatness_test_ui import render_greatness_test_panel
+except ImportError:
+    try:
+        from .greatness_test_ui import render_greatness_test_panel
+    except ImportError:
+        from war_room_offer_engine.ui_sections.greatness_test_ui import render_greatness_test_panel
+
 
 def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
 
@@ -33,6 +41,7 @@ def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
     wholesale_buyer_percent_arv = ui.wholesale_buyer_percent_arv
     st.text_area("Seller/agent notes, condition, occupancy, motivation", height=120, key="notes")
     st.caption(f"Current source: {st.session_state.get('source_mode')} / {st.session_state.get('lead_source')}")
+    render_greatness_test_panel(st, ui)
 
     analyze = st.button("Analyze Deal", type="primary")
 
