@@ -43,12 +43,15 @@ ONE_LOAD_FIELD_MAP = {
 
 ONE_LOAD_DEFAULTS = {
     "asking_price": 35000,
+    "contract_price": 0,
     "rent": 900,
     "beds": 3.0,
     "baths": 1.0,
     "sqft": 1000,
     "status": "Unknown",
     "occupancy": "Unknown",
+    "lead_type": "Agent",
+    "days_on_market": 0,
 }
 
 ONE_LOAD_WIDGET_DEFAULTS = {
@@ -96,19 +99,89 @@ def _state_has_manual_value(st, key: str) -> bool:
     return True
 
 
-def apply_one_load_import(st, normalized: dict) -> tuple[list[str], list[str], list[str]]:
+def _one_load_main_lead_type(lead_type: str) -> str:
+    lead_type_text = str(lead_type or "").lower()
+    if "off-market" in lead_type_text or "seller" in lead_type_text:
+        return "Seller"
+    if "agent" in lead_type_text or "mls" in lead_type_text:
+        return "Agent"
+    if "manual" in lead_type_text:
+        return "Manual"
+    return "Agent"
+
+
+def _coerce_one_load_value(state_key: str, value):
+    if value in [None, "", [], {}]:
+        return value
+    if state_key in ["asking_price", "contract_price", "rent", "sqft", "days_on_market", "sheet_arv", "taxes", "tax_assessed_value", "last_sale_price"]:
+        return int(float(value or 0))
+    if state_key in ["beds", "baths"]:
+        return float(value or 0)
+    return str(value) if not isinstance(value, str) else value
+
+
+def _field_changed_after_one_load(st, state_key: str) -> bool:
+    applied_values = st.session_state.get("one_load_applied_values", {}) or {}
+    if state_key not in applied_values:
+        return False
+    current = st.session_state.get(state_key)
+    return str(current) != str(applied_values.get(state_key))
+
+
+def _build_one_load_analyzer_values(normalized: dict) -> dict:
     data = normalized.get("data", {}) if isinstance(normalized, dict) else {}
+    seller = normalized.get("seller", {}) if isinstance(normalized, dict) else {}
+    asking_price = data.get("asking_price", 0)
+    repair_notes = seller.get("seller_repair_notes", "")
+    seller_notes = "\n".join(
+        part
+        for part in [
+            seller.get("seller_condition_notes", ""),
+            seller.get("seller_motivation", ""),
+            seller.get("seller_timeline", ""),
+            seller.get("access_notes", ""),
+        ]
+        if str(part or "").strip()
+    )
+    values = {
+        "address": data.get("address"),
+        "city": data.get("city"),
+        "market": data.get("market") or data.get("city"),
+        "state": data.get("state"),
+        "zip": data.get("zip"),
+        "asking_price": asking_price,
+        "contract_price": asking_price,
+        "beds": data.get("beds"),
+        "baths": data.get("baths"),
+        "sqft": data.get("sqft"),
+        "rent": data.get("rent"),
+        "listing_url": data.get("listing_url"),
+        "lead_type": _one_load_main_lead_type(normalized.get("lead_type", "")),
+        "status": data.get("status"),
+        "days_on_market": data.get("days_on_market"),
+        "listing_agent_name": data.get("listing_agent_name") or seller.get("seller_name"),
+        "listing_agent_phone": data.get("listing_agent_phone") or seller.get("seller_phone"),
+        "listing_agent_email": data.get("listing_agent_email") or seller.get("seller_email"),
+        "repair_notes": repair_notes,
+        "notes": seller_notes,
+    }
+    return {key: value for key, value in values.items() if value not in [None, "", 0, 0.0, [], {}]}
+
+
+def apply_one_load_import(st, normalized: dict, force: bool = False) -> tuple[list[str], list[str], list[str]]:
+    analyzer_values = _build_one_load_analyzer_values(normalized)
     imported = []
     skipped = []
     conflicts = list(normalized.get("warnings", []) or [])
     field_sources = dict(st.session_state.get("apify_field_sources", {}) or {})
     source = normalized.get("lead_source", "One-Load Deal Analyzer")
-    for import_key, state_key in ONE_LOAD_FIELD_MAP.items():
-        value = data.get(import_key)
+    applied_values = dict(st.session_state.get("one_load_applied_values", {}) or {})
+    for state_key, value in analyzer_values.items():
         if value in [None, "", 0, 0.0, [], {}]:
             continue
+        value = _coerce_one_load_value(state_key, value)
         current = st.session_state.get(state_key)
-        if _state_has_manual_value(st, state_key) and str(current) != str(value):
+        if not force and _field_changed_after_one_load(st, state_key):
             skipped.append(state_key)
             if state_key == "beds":
                 conflicts.append("Bed count conflict")
@@ -117,12 +190,28 @@ def apply_one_load_import(st, normalized: dict) -> tuple[list[str], list[str], l
             continue
         st.session_state[state_key] = value
         imported.append(state_key)
+        applied_values[state_key] = value
         field_sources[state_key] = source
     st.session_state["apify_field_sources"] = field_sources
     st.session_state["field_source_map_json"] = ui_json_dumps(field_sources)
     st.session_state["one_load_imported_fields"] = imported
     st.session_state["one_load_skipped_manual_fields"] = skipped
     st.session_state["one_load_conflict_flags"] = sorted(set(conflicts))
+    st.session_state["one_load_applied_values"] = applied_values
+    st.session_state["one_load_missing_analyzer_fields"] = [
+        key
+        for key in [
+            "address",
+            "asking_price",
+            "beds",
+            "baths",
+            "sqft",
+            "rent",
+            "repair_notes",
+        ]
+        if key not in analyzer_values
+    ]
+    st.session_state["one_load_import_status"] = "Lead imported into analyzer fields. Review before analyzing."
     return imported, skipped, conflicts
 
 
@@ -263,23 +352,14 @@ def _run_one_load(st, ui, csv_record: dict | None, exit_mode: str) -> dict:
     st.session_state["seller_desired_price"] = seller.get("seller_desired_price", payload.get("seller_desired_price", 0))
     st.session_state["seller_condition_notes"] = seller.get("seller_condition_notes", "")
     st.session_state["seller_repair_notes"] = seller.get("seller_repair_notes", payload.get("repairs_mentioned", ""))
-    st.session_state["notes"] = "\n".join(
-        part
-        for part in [
-            st.session_state.get("notes", ""),
-            payload.get("seller_notes", ""),
-            payload.get("motivation_notes", ""),
-            payload.get("access_notes", ""),
-        ]
-        if str(part or "").strip()
-    )
     repair_notes = " ".join(
         part
         for part in [payload.get("listing_text", ""), payload.get("seller_notes", ""), payload.get("repairs_mentioned", "")]
         if str(part or "").strip()
     )
     if repair_notes:
-        st.session_state["repair_notes"] = repair_notes
+        if "repair_notes" not in skipped:
+            st.session_state["repair_notes"] = repair_notes
         repair_analysis = ui.analyze_repairs(
             notes=repair_notes,
             sqft=float(st.session_state.get("sqft", 0) or 0),
@@ -372,6 +452,22 @@ def _run_one_load(st, ui, csv_record: dict | None, exit_mode: str) -> dict:
     return normalized
 
 
+def _render_imported_fields_summary(st) -> None:
+    imported = st.session_state.get("one_load_imported_fields", []) or []
+    missing = st.session_state.get("one_load_missing_analyzer_fields", []) or []
+    skipped = st.session_state.get("one_load_skipped_manual_fields", []) or []
+    if not imported and not missing and not skipped:
+        return
+    st.markdown("### Imported Fields Summary")
+    st.write(
+        {
+            "Fields updated": ", ".join(imported) if imported else "None",
+            "Fields missing": ", ".join(missing) if missing else "None",
+            "Fields skipped due to manual override": ", ".join(skipped) if skipped else "None",
+        }
+    )
+
+
 def _render_off_market_summary(st, normalized: dict) -> None:
     seller = normalized.get("seller", {})
     missing = normalized.get("missing_critical_fields", [])
@@ -415,6 +511,7 @@ def _render_one_load_summary(st, ui, normalized: dict) -> None:
             "Best next move": normalized.get("best_next_move", ""),
         }
     )
+    _render_imported_fields_summary(st)
     st.markdown("### Status Checklist")
     for item in normalized.get("status_checklist", []):
         if item.get("status") == "ok":
@@ -482,6 +579,7 @@ def render_one_load_deal_section(st, ui, exit_mode: str = "Auto") -> None:
                 st.warning(f"Could not read CSV yet: {exc}")
         if st.button("Run Full Deal Analysis", type="primary"):
             normalized = _run_one_load(st, ui, csv_record=csv_record, exit_mode=exit_mode)
+            st.success("Lead imported into analyzer fields. Review before analyzing.")
             if normalized.get("skipped_manual_fields"):
                 st.info("Manual overrides kept: " + ", ".join(normalized.get("skipped_manual_fields", [])))
             if normalized.get("conflict_flags"):
@@ -489,5 +587,12 @@ def render_one_load_deal_section(st, ui, exit_mode: str = "Auto") -> None:
                     st.warning(warning)
         normalized = st.session_state.get("one_load_normalized", {})
         if normalized:
+            if st.button("Apply One-Load Data to Analyzer", type="secondary"):
+                imported, skipped, conflicts = apply_one_load_import(st, normalized, force=True)
+                normalized["imported_fields"] = imported
+                normalized["skipped_manual_fields"] = skipped
+                normalized["conflict_flags"] = conflicts
+                st.session_state["one_load_normalized"] = normalized
+                st.success("Lead imported into analyzer fields. Review before analyzing.")
             _render_off_market_summary(st, normalized)
             _render_one_load_summary(st, ui, normalized)
