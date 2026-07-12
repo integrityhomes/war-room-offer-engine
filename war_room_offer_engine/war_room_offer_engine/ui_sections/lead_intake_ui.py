@@ -162,7 +162,8 @@ def _render_universal_listing_summary(st) -> None:
 
 def render_lead_intake_section(st, ui) -> None:
 
-    render_one_load_deal_section(st, ui, "Auto")
+    if not st.session_state.get("one_load_rendered_in_app", False):
+        render_one_load_deal_section(st, ui, "Auto")
 
     pd = ui.pd
     json = ui.json
