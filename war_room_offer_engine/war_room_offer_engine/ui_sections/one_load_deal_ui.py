@@ -42,6 +42,11 @@ ONE_LOAD_FIELD_MAP = {
 }
 
 ONE_LOAD_DEFAULTS = {
+    "address": "",
+    "city": "",
+    "state": "",
+    "zip": "",
+    "market": "",
     "asking_price": 35000,
     "contract_price": 0,
     "rent": 900,
@@ -52,6 +57,26 @@ ONE_LOAD_DEFAULTS = {
     "occupancy": "Unknown",
     "lead_type": "Agent",
     "days_on_market": 0,
+}
+
+ONE_LOAD_DEMO_VALUES = {
+    "address": {"123 Main St", "123 Main St, Decatur IL 62522"},
+    "city": {"Decatur"},
+    "state": {"IL"},
+    "market": {"Decatur IL", "Decatur, IL"},
+    "asking_price": {0, 35000},
+    "contract_price": {0, 35000},
+    "rent": {0, 900, 1120},
+    "beds": {0, 2, 2.0, 3, 3.0},
+    "baths": {0, 1, 1.0},
+    "sqft": {0, 1000},
+    "taxes": {0},
+    "tax_assessed_value": {0},
+    "days_on_market": {0},
+    "lead_type": {"Agent", "Unknown"},
+    "status": {"Unknown"},
+    "occupancy": {"Unknown"},
+    "livable": {"Unknown"},
 }
 
 ONE_LOAD_WIDGET_DEFAULTS = {
@@ -77,6 +102,23 @@ ONE_LOAD_WIDGET_DEFAULTS = {
 }
 
 
+_MISSING_DEFAULT = object()
+
+
+def _is_blank_or_zero(value) -> bool:
+    return value in [None, "", 0, 0.0, [], {}]
+
+
+def _is_demo_value(state_key: str, value) -> bool:
+    if _is_blank_or_zero(value):
+        return True
+    default_value = ONE_LOAD_DEFAULTS.get(state_key, _MISSING_DEFAULT)
+    if default_value is not _MISSING_DEFAULT and str(value).strip().lower() == str(default_value).strip().lower():
+        return True
+    demo_values = ONE_LOAD_DEMO_VALUES.get(state_key, set())
+    return any(str(value).strip().lower() == str(demo).strip().lower() for demo in demo_values)
+
+
 def initialize_one_load_defaults(st) -> None:
     legacy_key_map = {
         "one_load_apify_dataset_id": "one_load_apify_dataset",
@@ -91,10 +133,9 @@ def initialize_one_load_defaults(st) -> None:
 
 def _state_has_manual_value(st, key: str) -> bool:
     value = st.session_state.get(key)
-    if value in [None, "", 0, 0.0, [], {}]:
+    if _is_blank_or_zero(value):
         return False
-    default_value = ONE_LOAD_DEFAULTS.get(key)
-    if default_value is not None and str(value) == str(default_value):
+    if _is_demo_value(key, value):
         return False
     return True
 
@@ -155,29 +196,34 @@ def _build_one_load_analyzer_values(normalized: dict) -> dict:
         "baths": data.get("baths"),
         "sqft": data.get("sqft"),
         "rent": data.get("rent"),
+        "taxes": data.get("taxes"),
+        "tax_assessed_value": data.get("tax_assessed_value"),
         "listing_url": data.get("listing_url"),
         "lead_type": _one_load_main_lead_type(normalized.get("lead_type", "")),
         "status": data.get("status"),
         "days_on_market": data.get("days_on_market"),
+        "occupancy": data.get("occupancy") or seller.get("occupancy"),
+        "livable": "Unknown",
         "listing_agent_name": data.get("listing_agent_name") or seller.get("seller_name"),
         "listing_agent_phone": data.get("listing_agent_phone") or seller.get("seller_phone"),
         "listing_agent_email": data.get("listing_agent_email") or seller.get("seller_email"),
         "repair_notes": repair_notes,
         "notes": seller_notes,
     }
-    return {key: value for key, value in values.items() if value not in [None, "", 0, 0.0, [], {}]}
+    return {key: value for key, value in values.items() if not _is_blank_or_zero(value)}
 
 
-def apply_one_load_import(st, normalized: dict, force: bool = False) -> tuple[list[str], list[str], list[str]]:
+def apply_one_load_import(st, normalized: dict, force: bool = False, overwrite_demo_values: bool = True) -> tuple[list[str], list[str], list[str]]:
     analyzer_values = _build_one_load_analyzer_values(normalized)
     imported = []
     skipped = []
+    overwritten_defaults = []
     conflicts = list(normalized.get("warnings", []) or [])
     field_sources = dict(st.session_state.get("apify_field_sources", {}) or {})
     source = normalized.get("lead_source", "One-Load Deal Analyzer")
     applied_values = dict(st.session_state.get("one_load_applied_values", {}) or {})
     for state_key, value in analyzer_values.items():
-        if value in [None, "", 0, 0.0, [], {}]:
+        if _is_blank_or_zero(value):
             continue
         value = _coerce_one_load_value(state_key, value)
         current = st.session_state.get(state_key)
@@ -188,6 +234,15 @@ def apply_one_load_import(st, normalized: dict, force: bool = False) -> tuple[li
             elif state_key == "baths":
                 conflicts.append("Bath count conflict")
             continue
+        if not force and _state_has_manual_value(st, state_key):
+            skipped.append(state_key)
+            continue
+        if _is_demo_value(state_key, current):
+            if not overwrite_demo_values and not _is_blank_or_zero(current):
+                skipped.append(state_key)
+                continue
+            if not _is_blank_or_zero(current):
+                overwritten_defaults.append(state_key)
         st.session_state[state_key] = value
         imported.append(state_key)
         applied_values[state_key] = value
@@ -196,6 +251,7 @@ def apply_one_load_import(st, normalized: dict, force: bool = False) -> tuple[li
     st.session_state["field_source_map_json"] = ui_json_dumps(field_sources)
     st.session_state["one_load_imported_fields"] = imported
     st.session_state["one_load_skipped_manual_fields"] = skipped
+    st.session_state["one_load_overwritten_default_fields"] = overwritten_defaults
     st.session_state["one_load_conflict_flags"] = sorted(set(conflicts))
     st.session_state["one_load_applied_values"] = applied_values
     st.session_state["one_load_missing_analyzer_fields"] = [
@@ -211,7 +267,7 @@ def apply_one_load_import(st, normalized: dict, force: bool = False) -> tuple[li
         ]
         if key not in analyzer_values
     ]
-    st.session_state["one_load_import_status"] = "Lead imported into analyzer fields. Review before analyzing."
+    st.session_state["one_load_import_status"] = "Lead imported into analyzer fields. Review before final offer."
     return imported, skipped, conflicts
 
 
@@ -327,7 +383,7 @@ def _build_deal(st, ui, exit_mode: str):
     )
 
 
-def _run_one_load(st, ui, csv_record: dict | None, exit_mode: str) -> dict:
+def _run_one_load(st, ui, csv_record: dict | None, exit_mode: str, overwrite_demo_values: bool = True) -> dict:
     payload = _build_payload_from_state(st, csv_record=csv_record)
     method = payload.get("input_method", "")
     if method == "Apify dataset URL / ID" and payload.get("dataset_id"):
@@ -338,7 +394,7 @@ def _run_one_load(st, ui, csv_record: dict | None, exit_mode: str) -> dict:
         else:
             st.session_state["one_load_last_error"] = result.get("error", "Needs Manual Entry")
     normalized = normalize_one_load_lead(payload)
-    imported, skipped, conflicts = apply_one_load_import(st, normalized)
+    imported, skipped, conflicts = apply_one_load_import(st, normalized, overwrite_demo_values=overwrite_demo_values)
     seller = normalized.get("seller", {})
     st.session_state["one_load_normalized"] = normalized
     st.session_state["one_load_run_success"] = normalized.get("one_load_run_success", "No")
@@ -456,7 +512,8 @@ def _render_imported_fields_summary(st) -> None:
     imported = st.session_state.get("one_load_imported_fields", []) or []
     missing = st.session_state.get("one_load_missing_analyzer_fields", []) or []
     skipped = st.session_state.get("one_load_skipped_manual_fields", []) or []
-    if not imported and not missing and not skipped:
+    overwritten = st.session_state.get("one_load_overwritten_default_fields", []) or []
+    if not imported and not missing and not skipped and not overwritten:
         return
     st.markdown("### Imported Fields Summary")
     st.write(
@@ -464,6 +521,7 @@ def _render_imported_fields_summary(st) -> None:
             "Fields updated": ", ".join(imported) if imported else "None",
             "Fields missing": ", ".join(missing) if missing else "None",
             "Fields skipped due to manual override": ", ".join(skipped) if skipped else "None",
+            "Fields overwritten because they were default/demo values": ", ".join(overwritten) if overwritten else "None",
         }
     )
 
@@ -568,6 +626,7 @@ def render_one_load_deal_section(st, ui, exit_mode: str = "Auto") -> None:
             st.text_input("Access notes", key="one_load_access_notes")
             st.selectbox("Occupancy", ["Unknown", "Vacant", "Owner occupied", "Tenant occupied", "Occupied"], key="one_load_occupancy")
         uploaded_csv = st.file_uploader("Upload CSV", type=["csv"], key="one_load_csv")
+        overwrite_demo_values = st.checkbox("Overwrite default/demo values?", value=True, key="one_load_overwrite_demo_values")
         csv_record = None
         if uploaded_csv is not None:
             try:
@@ -578,8 +637,10 @@ def render_one_load_deal_section(st, ui, exit_mode: str = "Auto") -> None:
             except Exception as exc:
                 st.warning(f"Could not read CSV yet: {exc}")
         if st.button("Run Full Deal Analysis", type="primary"):
-            normalized = _run_one_load(st, ui, csv_record=csv_record, exit_mode=exit_mode)
-            st.success("Lead imported into analyzer fields. Review before analyzing.")
+            normalized = _run_one_load(st, ui, csv_record=csv_record, exit_mode=exit_mode, overwrite_demo_values=overwrite_demo_values)
+            if not overwrite_demo_values and st.session_state.get("one_load_overwritten_default_fields"):
+                st.info("Default/demo analyzer fields were left unchanged.")
+            st.success("Lead imported into analyzer fields. Review before final offer.")
             if normalized.get("skipped_manual_fields"):
                 st.info("Manual overrides kept: " + ", ".join(normalized.get("skipped_manual_fields", [])))
             if normalized.get("conflict_flags"):
@@ -588,11 +649,13 @@ def render_one_load_deal_section(st, ui, exit_mode: str = "Auto") -> None:
         normalized = st.session_state.get("one_load_normalized", {})
         if normalized:
             if st.button("Apply One-Load Data to Analyzer", type="secondary"):
-                imported, skipped, conflicts = apply_one_load_import(st, normalized, force=True)
+                imported, skipped, conflicts = apply_one_load_import(st, normalized, force=True, overwrite_demo_values=overwrite_demo_values)
                 normalized["imported_fields"] = imported
                 normalized["skipped_manual_fields"] = skipped
                 normalized["conflict_flags"] = conflicts
                 st.session_state["one_load_normalized"] = normalized
-                st.success("Lead imported into analyzer fields. Review before analyzing.")
+                st.session_state["one_load_import_status"] = "Lead imported into analyzer fields. Review before final offer."
+                st.success(st.session_state["one_load_import_status"])
+                st.rerun()
             _render_off_market_summary(st, normalized)
             _render_one_load_summary(st, ui, normalized)
