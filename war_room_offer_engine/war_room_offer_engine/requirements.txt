@@ -2,4 +2,3 @@ streamlit
 pandas
 openai
 pillow
-opencv-python-headless
