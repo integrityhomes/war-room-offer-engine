@@ -208,7 +208,7 @@ def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
         m1.metric("Deal Grade", result["grade"])
         m2.metric("Best Exit", result["best_exit"])
         m3.metric("First Offer", money(best.get("offer_to_send", best.get("target_offer_low", 0))))
-        m4.metric("Internal Max", money(best["max_offer"])
+        m4.metric("Internal Max", money(best["max_offer"]))
 
         c1, c2 = st.columns(2)
         with c1:
