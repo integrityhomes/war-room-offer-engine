@@ -51,6 +51,11 @@ data_sources = import_first(
     "war_room_offer_engine.data_sources",
     "war_room_offer_engine.war_room_offer_engine.data_sources",
 )
+one_load_sources = import_first(
+    "one_load_sources",
+    "war_room_offer_engine.one_load_sources",
+    "war_room_offer_engine.war_room_offer_engine.one_load_sources",
+)
 apify_connector = import_first(
     "apify_connector",
     "war_room_offer_engine.apify_connector",
@@ -60,6 +65,17 @@ sold_comps = import_first(
     "sold_comps",
     "war_room_offer_engine.sold_comps",
     "war_room_offer_engine.war_room_offer_engine.sold_comps",
+)
+sys.modules.pop("cv2", None)
+media_notes = import_first(
+    "media_notes",
+    "war_room_offer_engine.media_notes",
+    "war_room_offer_engine.war_room_offer_engine.media_notes",
+)
+check("cv2" not in sys.modules, "media_notes imports without requiring cv2")
+check(
+    getattr(media_notes, "OPENCV_UNAVAILABLE_MESSAGE", "") == "Video/photo frame analysis unavailable because OpenCV is not installed.",
+    "media_notes exposes safe OpenCV unavailable message",
 )
 
 assumption_kwargs = {
@@ -151,6 +167,12 @@ for function_name in [
 ]:
     check(hasattr(data_sources, function_name), f"data_sources function exists: {function_name}")
 
+for function_name in [
+    "normalize_one_load_lead",
+    "parse_seller_notes",
+]:
+    check(hasattr(one_load_sources, function_name), f"one_load_sources function exists: {function_name}")
+
 fake_zillow_record = {
     "zpid": 123456,
     "streetAddress": "123 Main St",
@@ -211,6 +233,65 @@ realtor_universal = data_sources.parse_universal_listing_text("Realtor.com", "ht
 check(realtor_universal["data"]["address"].startswith("789 Pine Road"), "Realtor-style fake pasted text parses")
 check(realtor_universal["data"]["baths"] == 1.5, "Realtor-style fake pasted text parses baths")
 
+one_load_zillow_text = one_load_sources.normalize_one_load_lead(
+    {
+        "lead_type": "On-market listing",
+        "lead_source": "Zillow",
+        "input_method": "Paste listing text",
+        "listing_url": "https://www.zillow.com/homedetails/321-Test-St",
+        "listing_text": "321 Test St, Richmond, VA 23220 $88,000 3 beds 1 bath 1,050 sqft DOM 11",
+    }
+)
+check(one_load_zillow_text["one_load_run_success"] == "Yes", "one-load run from fake Zillow text succeeds")
+check(one_load_zillow_text["data"]["address"].startswith("321 Test St"), "one-load fake Zillow text imports address")
+
+one_load_apify = one_load_sources.normalize_one_load_lead(
+    {
+        "lead_type": "Apify / Zillow dataset",
+        "lead_source": "Zillow",
+        "input_method": "Apify dataset URL / ID",
+        "record": fake_zillow_record,
+    }
+)
+check(one_load_apify["data"]["asking_price"] == 85000, "one-load run from fake Apify record imports price")
+
+off_market_notes = """
+Seller: Mary Owner. Phone 804-555-1212. 654 Seller Rd, Danville, VA 24540.
+Seller wants $42,000. Motivation: inherited house and wants simple closing.
+Timeline: this month. Occupancy: vacant. Repairs: roof leak, kitchen, bath, flooring. Access: lockbox after call.
+"""
+one_load_off_market = one_load_sources.normalize_one_load_lead(
+    {
+        "lead_type": "Off-market seller lead",
+        "lead_source": "Seller call",
+        "input_method": "Paste seller notes",
+        "seller_notes": off_market_notes,
+    }
+)
+check(one_load_off_market["seller"]["seller_phone"] == "804-555-1212", "one-load run from off-market seller notes parses phone")
+check(one_load_off_market["manual_review_needed"] == "Yes", "off-market seller notes stay weak until verified")
+
+cold_text_reply = one_load_sources.normalize_one_load_lead(
+    {
+        "lead_type": "Off-market seller lead",
+        "lead_source": "Cold text reply",
+        "input_method": "Paste seller notes",
+        "seller_notes": "Yes I would sell 987 Reply Ave, Cleveland, OH 44105 for $35,000. Vacant. Needs plumbing and paint.",
+    }
+)
+check(cold_text_reply["one_load_run_success"] == "Yes", "one-load run from cold text reply succeeds")
+check(cold_text_reply["data"]["address"].startswith("987 Reply Ave"), "one-load cold text reply parses address")
+
+one_load_missing = one_load_sources.normalize_one_load_lead(
+    {
+        "lead_type": "Manual quick entry",
+        "lead_source": "Other",
+        "input_method": "Manual quick entry",
+    }
+)
+check(one_load_missing["one_load_run_success"] == "No", "one-load missing data does not crash")
+check("address" in one_load_missing["missing_critical_fields"], "one-load missing data marks manual fields")
+
 fake_comp_rows = [
     {
         "address": "120 Main St",
@@ -259,7 +340,7 @@ check(normalized_comps[0]["sold_price"] == 150000, "fake sold comp normalizes pr
 subject = {"sqft": 1000, "beds": 3, "baths": 1, "property_type": "Single Family", "functional_risks": ""}
 scored_comps = sold_comps.score_sold_comps(normalized_comps, subject, "1 mile", "Last 12 months")
 check(scored_comps[0]["score"] == "Strong Comp", "strong sold comp scores correctly")
-check(scored_comps[-1]["score"] == "Bad Comp", "bad comp is excluded")
+check(scored_comps[-1]["score"] == "Bad Comp", "bad sold comp is excluded")
 auto_summary = sold_comps.calculate_arv_from_comps(scored_comps)
 check(auto_summary["recommended_arv"] > 0, "automatic sold comps calculate recommended ARV")
 manual_override_fallback = sold_comps.resolve_arv_fallback(
@@ -315,6 +396,11 @@ lead_intake_ui = import_first(
     "war_room_offer_engine.ui_sections.lead_intake_ui",
     "war_room_offer_engine.war_room_offer_engine.ui_sections.lead_intake_ui",
 )
+one_load_deal_ui = import_first(
+    "ui_sections.one_load_deal_ui",
+    "war_room_offer_engine.ui_sections.one_load_deal_ui",
+    "war_room_offer_engine.war_room_offer_engine.ui_sections.one_load_deal_ui",
+)
 check(hasattr(app, "build_simple_deal_answer"), "app simple deal answer function imports")
 check(hasattr(app, "build_repair_breakdown"), "app repair breakdown function imports")
 check(hasattr(app, "build_exit_strategy_confidence"), "app exit confidence function imports")
@@ -346,6 +432,100 @@ manual_override_payload = data_sources.universal_listing_from_record(
 universal_imported, universal_skipped, universal_conflicts = lead_intake_ui._apply_universal_listing_import(app.st, manual_override_payload)
 check(app.st.session_state["beds"] == 2 and "beds" in universal_skipped, "universal listing manual override wins")
 check("Bed count conflict" in universal_conflicts, "universal listing flags bed count conflict")
+
+app.st.session_state["one_load_applied_values"] = {}
+app.st.session_state["beds"] = app.FIELD_DEFAULTS["beds"]
+one_load_manual_override = one_load_sources.normalize_one_load_lead(
+    {
+        "lead_type": "On-market listing",
+        "lead_source": "Zillow",
+        "input_method": "Paste listing text",
+        "listing_text": "333 Override St, Richmond, VA 23220 $66,000 3 beds 1 bath 900 sqft",
+    }
+)
+one_load_deal_ui.apply_one_load_import(app.st, one_load_manual_override)
+app.st.session_state["beds"] = 2
+one_load_imported, one_load_skipped, one_load_conflicts = one_load_deal_ui.apply_one_load_import(app.st, one_load_manual_override)
+check(app.st.session_state["beds"] == 2 and "beds" in one_load_skipped, "one-load manual override wins")
+check("Bed count conflict" in one_load_conflicts, "one-load import flags bed count conflict")
+check(one_load_zillow_text["arv_confidence"] == "Weak", "one-load weak ARV is flagged before clean buy")
+app.st.session_state.pop("one_load_lead_source", None)
+app.st.session_state.pop("one_load_input_method", None)
+app.st.session_state.pop("one_load_property_address", None)
+one_load_deal_ui.initialize_one_load_defaults(app.st)
+check(app.st.session_state["one_load_lead_source"] == "Zillow", "one-load default state initializes")
+app.st.session_state["one_load_lead_source"] = "Redfin"
+app.st.session_state["one_load_property_address"] = "111 Stable State St"
+one_load_deal_ui.initialize_one_load_defaults(app.st)
+check(app.st.session_state["one_load_lead_source"] == "Redfin", "changing one-load lead source is preserved")
+check(app.st.session_state["one_load_property_address"] == "111 Stable State St", "changing one-load lead source does not clear required keys")
+app.st.session_state["one_load_applied_values"] = {}
+for key, value in {
+    "address": "",
+    "city": "",
+    "state": "",
+    "zip": "",
+    "market": "",
+    "asking_price": app.FIELD_DEFAULTS["asking_price"],
+    "contract_price": 0,
+    "rent": app.FIELD_DEFAULTS["rent"],
+    "beds": app.FIELD_DEFAULTS["beds"],
+    "baths": app.FIELD_DEFAULTS["baths"],
+    "sqft": app.FIELD_DEFAULTS["sqft"],
+    "repair_notes": "",
+    "notes": "",
+}.items():
+    app.st.session_state[key] = value
+one_load_main_mapping = one_load_sources.normalize_one_load_lead(
+    {
+        "lead_type": "Off-market seller lead",
+        "lead_source": "Seller call",
+        "input_method": "Paste seller notes",
+        "seller_notes": "Seller: Mary Owner. 654 Seller Rd, Danville, VA 24540. Seller wants $42,000. 2 beds 1 bath 900 sqft. Rent $950. Repairs: roof leak and flooring.",
+    }
+)
+one_load_deal_ui.apply_one_load_import(app.st, one_load_main_mapping)
+check(app.st.session_state["address"].startswith("654 Seller Rd"), "one-load off-market seller note maps to main analyzer address")
+check(app.st.session_state["asking_price"] == 42000 and app.st.session_state["contract_price"] == 42000, "one-load asking price maps correctly")
+check(app.st.session_state["beds"] == 2 and app.st.session_state["baths"] == 1 and app.st.session_state["rent"] == 950, "one-load beds/baths/rent map correctly")
+app.st.session_state["asking_price"] = 39000
+one_load_deal_ui.apply_one_load_import(app.st, one_load_main_mapping)
+check(app.st.session_state["asking_price"] == 39000, "one-load analyzer field manual override still wins")
+app.st.session_state["one_load_applied_values"] = {}
+for key, value in {
+    "address": "123 Main St",
+    "city": "Decatur",
+    "state": "IL",
+    "market": "Decatur IL",
+    "asking_price": 35000,
+    "contract_price": 0,
+    "rent": 900,
+    "beds": 3.0,
+    "baths": 1.0,
+    "sqft": 1000,
+    "occupancy": "Unknown",
+    "repair_notes": "",
+    "notes": "",
+}.items():
+    app.st.session_state[key] = value
+one_load_lebanon = one_load_sources.normalize_one_load_lead(
+    {
+        "lead_type": "Off-market seller lead",
+        "lead_source": "Seller call",
+        "input_method": "Paste seller notes",
+        "seller_notes": "Seller has a vacant 2 bed 1 bath house in Lebanon VA. Asking around 25000. House needs work. Rent may be around 800. Buyer demand unknown.",
+    }
+)
+one_load_deal_ui.apply_one_load_import(app.st, one_load_lebanon)
+check(app.st.session_state["market"] == "Lebanon VA" and app.st.session_state["city"] == "Lebanon", "one-load overwrites demo market/city values")
+check(app.st.session_state["asking_price"] == 25000 and app.st.session_state["contract_price"] == 25000, "one-load overwrites demo asking/buy price values")
+check(app.st.session_state["rent"] == 800 and app.st.session_state["beds"] == 2 and app.st.session_state["baths"] == 1, "one-load overwrites demo beds/baths/rent values")
+check(app.st.session_state["occupancy"] == "Vacant", "one-load seller notes fill occupancy")
+check("repair_notes" in app.st.session_state["one_load_imported_fields"], "one-load seller notes fill repair notes")
+check("asking_price" in app.st.session_state["one_load_overwritten_default_fields"], "one-load import reports overwritten demo values")
+app.st.session_state["rent"] = 775
+one_load_deal_ui.apply_one_load_import(app.st, one_load_lebanon)
+check(app.st.session_state["rent"] == 775, "one-load manual override after import still wins")
 
 
 def set_exit_inputs(
