@@ -73,6 +73,9 @@ class DealInput:
     notes: str
     arv: float = 0
     repairs: float = 0
+    rent_source: str = "Missing / RentCast unavailable"
+    rent_confidence: str = "Weak"
+    rent_verification_needed: str = "Yes"
 
 
 def money(value: float) -> str:
@@ -295,6 +298,13 @@ def calc_slow_flip(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
     adjusted_value_repair_max_offer = value_repair_max_offer * risk_adjustment if value_repair_max_offer > 0 else 0
     slow_flip_max_buy_price = clamp_nonnegative(getattr(a, "slow_flip_max_buy_price", 0))
     above_slow_flip_max_buy_price = slow_flip_max_buy_price > 0 and asking > slow_flip_max_buy_price
+    weak_rent = rent <= 0 or str(getattr(deal, "rent_verification_needed", "Yes")) == "Yes" or str(getattr(deal, "rent_confidence", "Weak")) in [
+        "Weak",
+        "Weak / seller stated only",
+        "Missing",
+        "Unknown",
+        "",
+    ]
 
     # Bradley slow-flip rule: 98% of slow-flip offers stay at or below $32,000.
     # The rent formula still runs, but the public offer/max is capped unless a human approves an exception.
@@ -339,6 +349,10 @@ def calc_slow_flip(deal: DealInput, a: Assumptions) -> Dict[str, Any]:
         "slow_flip_max_buy_price": slow_flip_max_buy_price,
         "slow_flip_max_source": getattr(a, "slow_flip_max_source", "Market Default"),
         "above_slow_flip_max_buy_price": above_slow_flip_max_buy_price,
+        "rent_source": getattr(deal, "rent_source", "Missing / RentCast unavailable"),
+        "rent_confidence": getattr(deal, "rent_confidence", "Weak"),
+        "rent_verification_needed": "Yes" if weak_rent else "No",
+        "slow_flip_rent_risk": "RentCast could not verify rent. Slow Flip numbers are not reliable until rent comps are manually verified." if weak_rent else "",
         "functional_risks": functional_risks,
         "estimated_fee_at_ask": estimated_fee_at_ask,
         "spread": resale_to_slow_flipper - asking if asking else resale_to_slow_flipper,
@@ -394,7 +408,7 @@ def choose_best_exit(wholesale: Dict[str, Any], slow_flip: Dict[str, Any], deal:
     if any(word in notes for word in ["fire", "foundation", "condemned", "tear down", "teardown"]):
         return "Needs Human Review"
     if deal.exit_mode == "Slow Flip Only":
-        if slow_flip.get("above_slow_flip_max_buy_price") or slow_flip.get("functional_risks"):
+        if slow_flip.get("above_slow_flip_max_buy_price") or slow_flip.get("functional_risks") or slow_flip.get("rent_verification_needed") == "Yes":
             return "Needs Human Review"
         if livable == "no":
             return "Needs Human Review"
@@ -408,6 +422,7 @@ def choose_best_exit(wholesale: Dict[str, Any], slow_flip: Dict[str, Any], deal:
         and livable != "no"
         and not slow_flip.get("above_slow_flip_max_buy_price")
         and not slow_flip.get("functional_risks")
+        and slow_flip.get("rent_verification_needed") != "Yes"
     ):
         return "Slow Flip"
     if wholesale["estimated_fee_at_ask"] >= 5000:
@@ -442,6 +457,8 @@ def risk_notes(deal: DealInput, best_exit: str) -> list[str]:
     if deal.exit_mode == "Slow Flip Only":
         if deal.rent <= 0:
             risks.append("Missing rent estimate. Pull RentCast before making a slow flip offer.")
+        if str(getattr(deal, "rent_verification_needed", "Yes")) == "Yes":
+            risks.append("RentCast could not verify rent. Slow Flip numbers are not reliable until rent comps are manually verified.")
         if deal.livable == "No":
             risks.append("Property is not livable. Do not treat this as a clean slow flip without human review.")
         if deal.livable == "Unknown":
@@ -506,6 +523,7 @@ def analyze_deal(deal: DealInput, assumptions: Assumptions | None = None) -> Dic
                 deal.livable != "No"
                 and not slow_flip.get("above_slow_flip_max_buy_price")
                 and not slow_flip.get("functional_risks")
+                and slow_flip.get("rent_verification_needed") != "Yes"
                 and slow_flip["estimated_fee_at_ask"] >= a.exception_assignment_fee
             )
             else "Needs Human Review"
