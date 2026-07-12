@@ -44,15 +44,22 @@ def parse_seller_notes(text: str) -> dict[str, Any]:
     repairs = find_text(
         [
             r"(?:repairs?|condition|needs)[:\s]+(.+?)(?:\.| timeline| asking| price| occupancy| access|$)",
+            r"(?:house|property|home)\s+needs\s+(.+?)(?:\.| timeline| asking| price| occupancy| access|$)",
             r"(?:roof|hvac|plumbing|electrical|kitchen|bath|flooring|paint|foundation|termite|water damage|mold)[^.]*",
         ]
     )
+    if repairs.lower() == "work" and re.search(r"\b(?:house|property|home)\s+needs\s+work\b", compact, re.IGNORECASE):
+        repairs = "House needs work"
     motivation = find_text([r"(?:motivation|why selling|reason)[:\s]+(.+?)(?:\.| timeline| asking| price|$)"])
     timeline = find_text([r"(?:timeline|needs to close|close by|when)[:\s]+(.+?)(?:\.| asking| price|$)"])
     occupancy = find_text([r"(?:occupancy|occupied|vacant)[:\s]+(vacant|tenant occupied|owner occupied|occupied|unknown)"])
+    if not occupancy and re.search(r"\bvacant\b", compact, re.IGNORECASE):
+        occupancy = "Vacant"
     access = find_text([r"(?:access|showing)[:\s]+(.+?)(?:\.|$)"])
     seller_name = find_text([r"(?:seller|owner|name)[:\s]+([A-Za-z .'-]{2,80})"])
-    desired_price = money_to_float(find_text([r"(?:seller wants|desired price|asking|ask|price)[:\s$]+([\d,]+)"]))
+    if re.match(r"has\s+", seller_name, re.IGNORECASE):
+        seller_name = ""
+    desired_price = money_to_float(find_text([r"(?:seller wants|desired price|asking|ask|price)(?:\s+around|\s+about)?[:\s$]+([\d,]+)"]))
     mortgage_balance = money_to_float(find_text([r"(?:mortgage balance|payoff|loan balance)[:\s$]+([\d,]+)"]))
     return {
         "seller_name": seller_name,
@@ -68,6 +75,34 @@ def parse_seller_notes(text: str) -> dict[str, Any]:
         "access_notes": access,
         "parsed_listing": parsed_listing,
     }
+
+
+def _fill_city_state_from_seller_notes(data: dict[str, Any], text: str) -> None:
+    if data.get("city") and data.get("state"):
+        return
+    match = re.search(r"\bin\s+([A-Za-z .'-]{2,80})\s+([A-Z]{2})\b", text or "", re.IGNORECASE)
+    if not match:
+        return
+    city = match.group(1).strip(" .,-")
+    state = match.group(2).upper()
+    if city and not data.get("city"):
+        data["city"] = city.title()
+    if state and not data.get("state"):
+        data["state"] = state
+    if not data.get("market") and city and state:
+        data["market"] = f"{city.title()} {state}"
+
+
+def _fill_money_from_seller_notes(data: dict[str, Any], text: str) -> None:
+    compact = re.sub(r"\s+", " ", str(text or ""))
+    if data.get("asking_price") in ["", 0, 0.0, None]:
+        asking_match = re.search(r"\b(?:asking|ask|price|seller wants)(?:\s+around|\s+about)?\s*\$?([\d,]+)\b", compact, re.IGNORECASE)
+        if asking_match:
+            data["asking_price"] = money_to_float(asking_match.group(1))
+    if data.get("rent") in ["", 0, 0.0, None]:
+        rent_match = re.search(r"\brent(?:\s+(?:may be|might be|is|around|about))*\s*\$?([\d,]+)\b", compact, re.IGNORECASE)
+        if rent_match:
+            data["rent"] = money_to_float(rent_match.group(1))
 
 
 def one_load_review_before_offer_checklist() -> list[str]:
@@ -156,6 +191,8 @@ def normalize_one_load_lead(payload: dict[str, Any]) -> dict[str, Any]:
         data["asking_price"] = seller["seller_desired_price"]
     if seller.get("occupancy") and not data.get("occupancy"):
         data["occupancy"] = seller["occupancy"]
+    _fill_city_state_from_seller_notes(data, seller_notes or listing_text)
+    _fill_money_from_seller_notes(data, seller_notes or listing_text)
 
     critical_fields = {
         "address": data.get("address"),
