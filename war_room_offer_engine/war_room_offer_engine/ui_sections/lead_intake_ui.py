@@ -3,6 +3,14 @@ from __future__ import annotations
 import json
 
 try:
+    from ui_sections.one_load_deal_ui import render_one_load_deal_section
+except ImportError:
+    try:
+        from .one_load_deal_ui import render_one_load_deal_section
+    except ImportError:
+        from war_room_offer_engine.ui_sections.one_load_deal_ui import render_one_load_deal_section
+
+try:
     from data_sources import (
         fetch_universal_apify_dataset,
         parse_universal_listing_text,
@@ -153,6 +161,10 @@ def _render_universal_listing_summary(st) -> None:
 
 
 def render_lead_intake_section(st, ui) -> None:
+
+    if not st.session_state.get("one_load_rendered_in_app", False):
+        st.session_state["one_load_rendered_in_app"] = True
+        render_one_load_deal_section(st, ui, "Auto")
 
     pd = ui.pd
     json = ui.json

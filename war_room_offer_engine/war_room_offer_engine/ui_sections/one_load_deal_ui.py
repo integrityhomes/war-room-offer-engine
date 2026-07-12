@@ -1,0 +1,457 @@
+from __future__ import annotations
+
+try:
+    from data_sources import fetch_universal_apify_dataset
+    from one_load_sources import normalize_one_load_lead
+except ImportError:
+    try:
+        from ..data_sources import fetch_universal_apify_dataset
+        from ..one_load_sources import normalize_one_load_lead
+    except ImportError:
+        from war_room_offer_engine.data_sources import fetch_universal_apify_dataset
+        from war_room_offer_engine.one_load_sources import normalize_one_load_lead
+
+
+ONE_LOAD_FIELD_MAP = {
+    "address": "address",
+    "city": "city",
+    "state": "state",
+    "zip": "zip",
+    "market": "market",
+    "property_type": "property_type",
+    "beds": "beds",
+    "baths": "baths",
+    "sqft": "sqft",
+    "lot_size": "lot_size",
+    "year_built": "year_built",
+    "asking_price": "asking_price",
+    "status": "status",
+    "days_on_market": "days_on_market",
+    "listing_url": "listing_url",
+    "listing_agent_name": "listing_agent_name",
+    "listing_agent_phone": "listing_agent_phone",
+    "listing_agent_email": "listing_agent_email",
+    "listing_brokerage": "listing_brokerage",
+    "sheet_arv": "sheet_arv",
+    "rent": "rent",
+    "tax_assessed_value": "tax_assessed_value",
+    "taxes": "taxes",
+    "last_sale_date": "last_sale_date",
+    "last_sale_price": "last_sale_price",
+    "occupancy": "occupancy",
+}
+
+ONE_LOAD_DEFAULTS = {
+    "asking_price": 35000,
+    "rent": 900,
+    "beds": 3.0,
+    "baths": 1.0,
+    "sqft": 1000,
+    "status": "Unknown",
+    "occupancy": "Unknown",
+}
+
+
+def _state_has_manual_value(st, key: str) -> bool:
+    value = st.session_state.get(key)
+    if value in [None, "", 0, 0.0, [], {}]:
+        return False
+    default_value = ONE_LOAD_DEFAULTS.get(key)
+    if default_value is not None and str(value) == str(default_value):
+        return False
+    return True
+
+
+def apply_one_load_import(st, normalized: dict) -> tuple[list[str], list[str], list[str]]:
+    data = normalized.get("data", {}) if isinstance(normalized, dict) else {}
+    imported = []
+    skipped = []
+    conflicts = list(normalized.get("warnings", []) or [])
+    field_sources = dict(st.session_state.get("apify_field_sources", {}) or {})
+    source = normalized.get("lead_source", "One-Load Deal Analyzer")
+    for import_key, state_key in ONE_LOAD_FIELD_MAP.items():
+        value = data.get(import_key)
+        if value in [None, "", 0, 0.0, [], {}]:
+            continue
+        current = st.session_state.get(state_key)
+        if _state_has_manual_value(st, state_key) and str(current) != str(value):
+            skipped.append(state_key)
+            if state_key == "beds":
+                conflicts.append("Bed count conflict")
+            elif state_key == "baths":
+                conflicts.append("Bath count conflict")
+            continue
+        st.session_state[state_key] = value
+        imported.append(state_key)
+        field_sources[state_key] = source
+    st.session_state["apify_field_sources"] = field_sources
+    st.session_state["field_source_map_json"] = ui_json_dumps(field_sources)
+    st.session_state["one_load_imported_fields"] = imported
+    st.session_state["one_load_skipped_manual_fields"] = skipped
+    st.session_state["one_load_conflict_flags"] = sorted(set(conflicts))
+    return imported, skipped, conflicts
+
+
+def ui_json_dumps(value) -> str:
+    try:
+        import json
+
+        return json.dumps(value)
+    except Exception:
+        return "{}"
+
+
+def _build_payload_from_state(st, csv_record: dict | None = None) -> dict:
+    return {
+        "lead_type": st.session_state.get("one_load_lead_type", ""),
+        "lead_source": st.session_state.get("one_load_lead_source", ""),
+        "input_method": st.session_state.get("one_load_input_method", ""),
+        "property_address": st.session_state.get("one_load_property_address", ""),
+        "listing_url": st.session_state.get("one_load_listing_url", ""),
+        "dataset_id": st.session_state.get("one_load_apify_dataset_id", ""),
+        "listing_text": st.session_state.get("one_load_listing_text", ""),
+        "seller_notes": st.session_state.get("one_load_seller_notes", ""),
+        "asking_price": st.session_state.get("one_load_asking_price", 0),
+        "seller_desired_price": st.session_state.get("one_load_seller_desired_price", 0),
+        "mortgage_balance": st.session_state.get("one_load_mortgage_balance", 0),
+        "occupancy": st.session_state.get("one_load_occupancy", ""),
+        "motivation_notes": st.session_state.get("one_load_motivation_notes", ""),
+        "timeline": st.session_state.get("one_load_timeline", ""),
+        "repairs_mentioned": st.session_state.get("one_load_repairs_mentioned", ""),
+        "access_notes": st.session_state.get("one_load_access_notes", ""),
+        "contact_name": st.session_state.get("one_load_contact_name", ""),
+        "contact_phone": st.session_state.get("one_load_contact_phone", ""),
+        "contact_email": st.session_state.get("one_load_contact_email", ""),
+        "buyer_demand_confidence": st.session_state.get("buyer_demand_confidence", "Unknown"),
+        "deal_protection_mode": st.session_state.get("deal_protection_mode", "Yes"),
+        "record": csv_record or {},
+    }
+
+
+def _build_assumptions(st, ui):
+    market_default_buyer_percent = ui.get_market_wholesale_buyer_percent(st.session_state.get("repair_market", "Central IL"))
+    slow_flip_lead_search_max = ui.get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
+    slow_flip_max_buy_price, slow_flip_max_source = ui.resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
+    wholesale_model = ui.advanced_wholesale_buyer_model(
+        market=st.session_state.get("repair_market", "Central IL"),
+        arv=float(st.session_state.get("arv", 0) or st.session_state.get("sheet_arv", 0) or 0),
+        repairs=float(st.session_state.get("repairs", 0) or 0),
+        notes=st.session_state.get("notes", ""),
+        repair_notes=st.session_state.get("repair_notes", "") + " " + st.session_state.get("manual_repair_notes", ""),
+        property_type=st.session_state.get("property_type", ""),
+        days_on_market=int(st.session_state.get("days_on_market", 0) or 0),
+        buyer_demand_confidence=st.session_state.get("buyer_demand_confidence", "Unknown"),
+        market_type=st.session_state.get("market_type", "Auto"),
+        occupancy=st.session_state.get("occupancy", "Unknown"),
+        livable=st.session_state.get("livable", "Unknown"),
+        exit_confidence=st.session_state.get("exit_strategy_confidence", "Unknown"),
+    )
+    final_buyer_percent = float(ui.wholesale_buyer_percent_arv) if ui.manual_wholesale_override else float(wholesale_model.get("buyer_percent", market_default_buyer_percent))
+    return ui.Assumptions(
+        min_assignment_fee=float(ui.min_assignment_fee),
+        exception_assignment_fee=float(ui.exception_assignment_fee),
+        slow_flip_rent_multiple=float(ui.slow_flip_rent_multiple),
+        close_title_buffer=float(ui.close_title_buffer),
+        target_offer_discount=float(ui.target_offer_discount),
+        wholesale_buyer_percent_arv=final_buyer_percent,
+        wholesale_buyer_percent_source="Manual Override" if ui.manual_wholesale_override else "Market Default",
+        wholesale_buyer_percent_range=wholesale_model.get("range", ""),
+        wholesale_buyer_percent_reason=wholesale_model.get("reason_text", ""),
+        market_liquidity_tier=wholesale_model.get("tier", ""),
+        market_wholesale_buyer_percent=float(market_default_buyer_percent),
+        slow_flip_max_offer_cap=float(ui.slow_flip_max_offer_cap),
+        slow_flip_first_offer_gap=float(ui.slow_flip_first_offer_gap),
+        slow_flip_lead_search_max=float(slow_flip_lead_search_max),
+        slow_flip_lead_search_source="Market Default",
+        above_slow_flip_lead_search_range=bool(slow_flip_lead_search_max > 0 and float(st.session_state.get("asking_price", 0) or 0) > slow_flip_lead_search_max),
+        inside_slow_flip_lead_search_range=bool(slow_flip_lead_search_max > 0 and float(st.session_state.get("asking_price", 0) or 0) <= slow_flip_lead_search_max),
+        slow_flip_max_buy_price=float(slow_flip_max_buy_price),
+        slow_flip_max_source=slow_flip_max_source,
+        above_slow_flip_max_buy_price=bool(slow_flip_max_buy_price > 0 and float(st.session_state.get("asking_price", 0) or 0) > slow_flip_max_buy_price),
+    )
+
+
+def _build_deal(st, ui, exit_mode: str):
+    resolved_arv, value_source = ui.resolve_value_source()
+    st.session_state["value_source"] = value_source
+    analysis_price = float(st.session_state.get("contract_price", 0) or 0) or float(st.session_state.get("asking_price", 0) or 0)
+    return ui.DealInput(
+        address=st.session_state.get("address", ""),
+        market=st.session_state.get("market", ""),
+        lead_type=st.session_state.get("lead_type", "Agent"),
+        exit_mode=exit_mode,
+        asking_price=analysis_price,
+        rent=float(st.session_state.get("rent", 0) or 0),
+        beds=float(st.session_state.get("beds", 0) or 0),
+        baths=float(st.session_state.get("baths", 0) or 0),
+        sqft=float(st.session_state.get("sqft", 0) or 0),
+        taxes=float(st.session_state.get("taxes", 0) or 0),
+        status=st.session_state.get("status", "Unknown"),
+        occupancy=st.session_state.get("occupancy", "Unknown"),
+        livable=st.session_state.get("livable", "Unknown"),
+        days_on_market=int(st.session_state.get("days_on_market", 0) or 0),
+        notes="\n".join(
+            part
+            for part in [
+                st.session_state.get("notes", ""),
+                st.session_state.get("repair_notes", ""),
+                st.session_state.get("manual_repair_notes", ""),
+            ]
+            if str(part or "").strip()
+        ),
+        arv=float(resolved_arv or 0),
+        repairs=float(st.session_state.get("repairs", 0) or 0),
+    )
+
+
+def _run_one_load(st, ui, csv_record: dict | None, exit_mode: str) -> dict:
+    payload = _build_payload_from_state(st, csv_record=csv_record)
+    method = payload.get("input_method", "")
+    if method == "Apify dataset URL / ID" and payload.get("dataset_id"):
+        result = fetch_universal_apify_dataset(payload["dataset_id"], source=payload.get("lead_source", "Apify Dataset"), limit=1)
+        rows = result.get("rows", []) if result.get("ok") else []
+        if rows:
+            payload["record"] = rows[0].get("data", {})
+        else:
+            st.session_state["one_load_last_error"] = result.get("error", "Needs Manual Entry")
+    normalized = normalize_one_load_lead(payload)
+    imported, skipped, conflicts = apply_one_load_import(st, normalized)
+    seller = normalized.get("seller", {})
+    st.session_state["one_load_normalized"] = normalized
+    st.session_state["one_load_run_success"] = normalized.get("one_load_run_success", "No")
+    st.session_state["one_load_missing_fields"] = normalized.get("missing_critical_fields", [])
+    st.session_state["one_load_data_sources_used"] = normalized.get("data_sources_used", [])
+    st.session_state["seller_name"] = seller.get("seller_name", payload.get("contact_name", ""))
+    st.session_state["seller_phone"] = seller.get("seller_phone", payload.get("contact_phone", ""))
+    st.session_state["seller_email"] = seller.get("seller_email", payload.get("contact_email", ""))
+    st.session_state["seller_motivation"] = seller.get("seller_motivation", payload.get("motivation_notes", ""))
+    st.session_state["seller_timeline"] = seller.get("seller_timeline", payload.get("timeline", ""))
+    st.session_state["seller_desired_price"] = seller.get("seller_desired_price", payload.get("seller_desired_price", 0))
+    st.session_state["seller_condition_notes"] = seller.get("seller_condition_notes", "")
+    st.session_state["seller_repair_notes"] = seller.get("seller_repair_notes", payload.get("repairs_mentioned", ""))
+    st.session_state["notes"] = "\n".join(
+        part
+        for part in [
+            st.session_state.get("notes", ""),
+            payload.get("seller_notes", ""),
+            payload.get("motivation_notes", ""),
+            payload.get("access_notes", ""),
+        ]
+        if str(part or "").strip()
+    )
+    repair_notes = " ".join(
+        part
+        for part in [payload.get("listing_text", ""), payload.get("seller_notes", ""), payload.get("repairs_mentioned", "")]
+        if str(part or "").strip()
+    )
+    if repair_notes:
+        st.session_state["repair_notes"] = repair_notes
+        repair_analysis = ui.analyze_repairs(
+            notes=repair_notes,
+            sqft=float(st.session_state.get("sqft", 0) or 0),
+            baths=float(st.session_state.get("baths", 0) or 0),
+            uploaded_files=[],
+            market=st.session_state.get("repair_market", "Central IL"),
+            repair_level=st.session_state.get("repair_level", "Rental Ready"),
+            pricing_mode=st.session_state.get("repair_pricing_mode", "Investor standard"),
+            repair_scope_confidence=st.session_state.get("repair_scope_confidence", "Unknown"),
+            market_labor_cost=st.session_state.get("market_labor_cost", "Unknown"),
+            repair_cushion_percent=ui.repair_cushion_percent_value(),
+            manual_repair_adjustment=float(st.session_state.get("manual_repair_adjustment", 0) or 0),
+        )
+        st.session_state["repair_analysis"] = repair_analysis
+        st.session_state["repairs"] = int(repair_analysis.get("recommended_repair_number", 0) or st.session_state.get("repairs", 0) or 0)
+    if st.session_state.get("address"):
+        pulled = ui.fetch_all_sources(
+            st.session_state.get("address", ""),
+            beds=float(st.session_state.get("beds", 0) or 0),
+            baths=float(st.session_state.get("baths", 0) or 0),
+            sqft=float(st.session_state.get("sqft", 0) or 0),
+            include_listing_sheet=st.session_state.get("source_mode") == "Zillow / Sheet Match",
+        )
+        st.session_state["last_source_results"] = pulled
+        merged = ui.merge_results(pulled)
+        st.session_state["last_auto_pull"] = merged
+        ui.update_state_from_auto_pull(merged)
+    protection = ui.build_deal_protection_payload(
+        {
+            "contract_status": st.session_state.get("contract_status", "Not under contract"),
+            "deal_protection_mode": st.session_state.get("deal_protection_mode", "Yes"),
+            "address_sharing_level": st.session_state.get("address_sharing_level", "Hide exact address"),
+            "listing_source_sharing_level": st.session_state.get("listing_source_sharing_level", "Hide listing/source links"),
+            "buyer_message_type": st.session_state.get("buyer_message_type", "Pre-contract demand check"),
+            "address": st.session_state.get("address", ""),
+            "city": st.session_state.get("city", ""),
+            "state": st.session_state.get("state", ""),
+            "market": st.session_state.get("market", ""),
+            "beds": st.session_state.get("beds", 0),
+            "baths": st.session_state.get("baths", 0),
+            "arv": st.session_state.get("arv", st.session_state.get("sheet_arv", 0)),
+            "repairs": st.session_state.get("repairs", 0),
+            "asking_price": st.session_state.get("asking_price", 0),
+            "listing_url": st.session_state.get("listing_url", ""),
+            "notes": st.session_state.get("notes", ""),
+            "repair_notes": st.session_state.get("repair_notes", ""),
+            "mold_verified": ui.mold_verified_bool(),
+        }
+    )
+    for key, value in protection.items():
+        st.session_state[key] = value
+    assumptions = _build_assumptions(st, ui)
+    deal = _build_deal(st, ui, exit_mode)
+    result = ui.analyze_deal(deal, assumptions)
+    final_summary = ui.render_final_decision_box(
+        result=result,
+        deal=deal,
+        value_source=st.session_state.get("value_source", "Missing"),
+        uploaded_files=[],
+        repair_notes=st.session_state.get("repair_notes", ""),
+        assumptions=assumptions,
+    )
+    best = result.get("best", {}) if isinstance(result, dict) else {}
+    final_decision = final_summary.get("final_decision", result.get("best_exit", "Needs Human Review"))
+    team_action = final_summary.get("team_action", "")
+    first_offer = best.get("offer_to_send") or best.get("target_offer_low") or 0
+    internal_max = best.get("max_offer") or best.get("target_offer_high") or 0
+    normalized.update(
+        {
+            "imported_fields": imported,
+            "skipped_manual_fields": skipped,
+            "conflict_flags": conflicts,
+            "final_simple_answer": final_decision,
+            "first_offer": first_offer,
+            "internal_max": internal_max,
+            "do_not_exceed": internal_max,
+            "best_next_move": team_action,
+            "final_decision": final_decision,
+            "arv_source": st.session_state.get("arv_source_used", st.session_state.get("value_source", "Missing")),
+            "arv_confidence": st.session_state.get("arv_confidence", "Not enough data"),
+            "rent_confidence": "Weak" if float(st.session_state.get("rent", 0) or 0) <= 0 else st.session_state.get("rental_demand_confidence", "Unknown"),
+            "repair_source": ui.resolve_repair_source(),
+            "buyer_demand_confidence": st.session_state.get("buyer_demand_confidence", "Unknown"),
+            "deal_protection_status": st.session_state.get("deal_protection_mode", "Yes"),
+        }
+    )
+    st.session_state["one_load_normalized"] = normalized
+    st.session_state["one_load_final_answer"] = normalized.get("final_simple_answer", "")
+    st.session_state["one_load_next_action"] = normalized.get("best_next_move", "")
+    return normalized
+
+
+def _render_off_market_summary(st, normalized: dict) -> None:
+    seller = normalized.get("seller", {})
+    missing = normalized.get("missing_critical_fields", [])
+    st.markdown("### Off-Market Lead Summary")
+    st.write(
+        {
+            "Seller name": st.session_state.get("seller_name", seller.get("seller_name", "")),
+            "Seller phone": st.session_state.get("seller_phone", seller.get("seller_phone", "")),
+            "Lead source": normalized.get("lead_source", ""),
+            "Motivation": st.session_state.get("seller_motivation", seller.get("seller_motivation", "")),
+            "Asking price / desired price": st.session_state.get("seller_desired_price", seller.get("seller_desired_price", 0)),
+            "Timeline": st.session_state.get("seller_timeline", seller.get("seller_timeline", "")),
+            "Occupancy": st.session_state.get("occupancy", ""),
+            "Condition notes": st.session_state.get("seller_condition_notes", seller.get("seller_condition_notes", "")),
+            "Repairs mentioned": st.session_state.get("seller_repair_notes", seller.get("seller_repair_notes", "")),
+            "Access status": st.session_state.get("one_load_access_notes", ""),
+            "Missing info": ", ".join(missing) if missing else "None",
+        }
+    )
+
+
+def _render_one_load_summary(st, ui, normalized: dict) -> None:
+    st.markdown("### One-Load Results Summary")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Data imported?", normalized.get("one_load_run_success", "No"))
+    c2.metric("Lead type", normalized.get("lead_type", ""))
+    c3.metric("Lead source", normalized.get("lead_source", ""))
+    c4.metric("Final answer", normalized.get("final_simple_answer", "Needs Manual Entry"))
+    st.write(
+        {
+            "Missing critical fields": ", ".join(normalized.get("missing_critical_fields", [])) or "None",
+            "ARV source used": normalized.get("arv_source", "Missing"),
+            "ARV confidence": normalized.get("arv_confidence", "Not enough data"),
+            "Rent confidence": normalized.get("rent_confidence", "Weak"),
+            "Repair estimate source": normalized.get("repair_source", "Missing"),
+            "Buyer demand confidence": normalized.get("buyer_demand_confidence", "Unknown"),
+            "Deal protection status": normalized.get("deal_protection_status", "Yes"),
+            "First offer": ui.money(normalized.get("first_offer", 0)),
+            "Internal max": ui.money(normalized.get("internal_max", 0)),
+            "Do not exceed price": ui.money(normalized.get("do_not_exceed", 0)),
+            "Best next move": normalized.get("best_next_move", ""),
+        }
+    )
+    st.markdown("### Status Checklist")
+    for item in normalized.get("status_checklist", []):
+        if item.get("status") == "ok":
+            st.success(item.get("label", ""))
+        else:
+            st.warning(item.get("label", ""))
+    st.markdown("### Review Before Offer")
+    for item in normalized.get("review_before_offer_checklist", []):
+        st.checkbox(item, value=False, key=f"review_before_offer_{item}")
+
+
+def render_one_load_deal_section(st, ui, exit_mode: str = "Auto") -> None:
+    st.header("One-Load Deal Analyzer")
+    st.caption("One input can populate the deal engine for on-market, off-market, CSV, Apify, and manual leads.")
+    with st.expander("One-Load Deal Analyzer", expanded=True):
+        top_cols = st.columns(3)
+        with top_cols[0]:
+            st.selectbox(
+                "Lead Type",
+                ["On-market listing", "Off-market seller lead", "Agent / MLS lead", "Apify / Zillow dataset", "CSV / list lead", "Manual quick entry"],
+                key="one_load_lead_type",
+            )
+            st.text_input("Property address", key="one_load_property_address")
+            st.number_input("Asking price", min_value=0, step=1000, key="one_load_asking_price")
+            st.text_input("Contact name", key="one_load_contact_name")
+        with top_cols[1]:
+            st.selectbox(
+                "Lead Source",
+                ["Zillow", "Redfin", "Realtor.com", "MLS", "Agent", "XLeads", "Cold text reply", "Seller call", "Facebook", "Driving for Dollars", "Direct mail", "Probate", "Tax delinquent", "Code violation", "Vacant house", "Referral", "Other"],
+                key="one_load_lead_source",
+            )
+            st.text_input("Listing URL", key="one_load_listing_url")
+            st.number_input("Seller desired price", min_value=0, step=1000, key="one_load_seller_desired_price")
+            st.text_input("Contact phone", key="one_load_contact_phone")
+        with top_cols[2]:
+            st.selectbox(
+                "Input Method",
+                ["Property address", "Listing URL", "Apify dataset URL / ID", "Paste listing text", "Paste seller notes", "Upload CSV", "Manual quick entry"],
+                key="one_load_input_method",
+            )
+            st.text_input("Apify dataset ID / URL", key="one_load_apify_dataset_id")
+            st.number_input("Mortgage balance if known", min_value=0, step=1000, key="one_load_mortgage_balance")
+            st.text_input("Contact email", key="one_load_contact_email")
+        detail_cols = st.columns(2)
+        with detail_cols[0]:
+            st.text_area("Pasted listing text", height=120, key="one_load_listing_text")
+            st.text_area("Motivation notes", height=80, key="one_load_motivation_notes")
+            st.text_input("Timeline", key="one_load_timeline")
+        with detail_cols[1]:
+            st.text_area("Seller conversation notes", height=120, key="one_load_seller_notes")
+            st.text_area("Repairs mentioned by seller", height=80, key="one_load_repairs_mentioned")
+            st.text_input("Access notes", key="one_load_access_notes")
+            st.selectbox("Occupancy", ["Unknown", "Vacant", "Owner occupied", "Tenant occupied", "Occupied"], key="one_load_occupancy")
+        uploaded_csv = st.file_uploader("Upload CSV", type=["csv"], key="one_load_csv")
+        csv_record = None
+        if uploaded_csv is not None:
+            try:
+                csv_df = ui.pd.read_csv(uploaded_csv)
+                st.dataframe(csv_df.head(5), use_container_width=True)
+                if not csv_df.empty:
+                    csv_record = csv_df.iloc[0].to_dict()
+            except Exception as exc:
+                st.warning(f"Could not read CSV yet: {exc}")
+        if st.button("Run Full Deal Analysis", type="primary"):
+            normalized = _run_one_load(st, ui, csv_record=csv_record, exit_mode=exit_mode)
+            if normalized.get("skipped_manual_fields"):
+                st.info("Manual overrides kept: " + ", ".join(normalized.get("skipped_manual_fields", [])))
+            if normalized.get("conflict_flags"):
+                for warning in normalized.get("conflict_flags", []):
+                    st.warning(warning)
+        normalized = st.session_state.get("one_load_normalized", {})
+        if normalized:
+            _render_off_market_summary(st, normalized)
+            _render_one_load_summary(st, ui, normalized)
