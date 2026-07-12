@@ -140,6 +140,9 @@ for function_name in [
     "merge_results",
     "get_secret",
     "parse_listing_text",
+    "parse_universal_listing_text",
+    "universal_listing_from_record",
+    "fetch_universal_apify_dataset",
     "provider_connection_status",
     "fetch_apify_zillow_dataset",
     "run_apify_zillow_actor",
@@ -181,6 +184,32 @@ check(
     not missing_token_result.get("ok") and "Missing Apify token" in missing_token_result.get("error", ""),
     "Apify/Zillow missing token fails safely",
 )
+universal_missing_token = data_sources.fetch_universal_apify_dataset("abc123", limit=1)
+check(not universal_missing_token.get("ok"), "universal listing missing API token does not crash")
+
+zillow_universal = data_sources.universal_listing_from_record(fake_zillow_record, source="Zillow")
+check(zillow_universal["data"]["address"].startswith("123 Main St"), "Zillow-style fake record parses")
+check(zillow_universal["data"]["asking_price"] == 85000, "Zillow-style fake record imports price")
+
+redfin_text = """
+Redfin listing: 456 Oak Ave, Lebanon, VA 24266
+$72,500 2 beds 1 bath 920 sqft 18 days on market
+Listed by Jane Agent, Blue Ridge Realty, jane@example.com, 276-555-1212
+Redfin Estimate: $82,000
+"""
+redfin_universal = data_sources.parse_universal_listing_text("Redfin", "https://www.redfin.com/VA/Lebanon/456-Oak-Ave", redfin_text)
+check(redfin_universal["data"]["address"].startswith("456 Oak Ave"), "Redfin-style fake pasted text parses")
+check(redfin_universal["source"] == "Redfin", "Redfin-style source is detected")
+
+realtor_text = """
+Realtor.com listing 789 Pine Road, Cleveland, OH 44105
+List price $59,900, 3 bedrooms, 1.5 bathrooms, 1,140 square feet, DOM 33
+Brokerage: Test Realty Group
+Realtor estimate: $74,000
+"""
+realtor_universal = data_sources.parse_universal_listing_text("Realtor.com", "https://www.realtor.com/realestateandhomes-detail/789-Pine-Road", realtor_text)
+check(realtor_universal["data"]["address"].startswith("789 Pine Road"), "Realtor-style fake pasted text parses")
+check(realtor_universal["data"]["baths"] == 1.5, "Realtor-style fake pasted text parses baths")
 
 fake_comp_rows = [
     {
@@ -230,7 +259,7 @@ check(normalized_comps[0]["sold_price"] == 150000, "fake sold comp normalizes pr
 subject = {"sqft": 1000, "beds": 3, "baths": 1, "property_type": "Single Family", "functional_risks": ""}
 scored_comps = sold_comps.score_sold_comps(normalized_comps, subject, "1 mile", "Last 12 months")
 check(scored_comps[0]["score"] == "Strong Comp", "strong sold comp scores correctly")
-check(scored_comps[-1]["score"] == "Bad Comp", "bad sold comp is excluded")
+check(scored_comps[-1]["score"] == "Bad Comp", "bad comp is excluded")
 auto_summary = sold_comps.calculate_arv_from_comps(scored_comps)
 check(auto_summary["recommended_arv"] > 0, "automatic sold comps calculate recommended ARV")
 manual_override_fallback = sold_comps.resolve_arv_fallback(
@@ -281,6 +310,11 @@ check(result["wholesale"]["estimated_fee_at_ask"] >= assumptions.exception_assig
 
 with contextlib.redirect_stderr(io.StringIO()):
     app = import_first("app", "war_room_offer_engine.app", "war_room_offer_engine.war_room_offer_engine.app")
+lead_intake_ui = import_first(
+    "ui_sections.lead_intake_ui",
+    "war_room_offer_engine.ui_sections.lead_intake_ui",
+    "war_room_offer_engine.war_room_offer_engine.ui_sections.lead_intake_ui",
+)
 check(hasattr(app, "build_simple_deal_answer"), "app simple deal answer function imports")
 check(hasattr(app, "build_repair_breakdown"), "app repair breakdown function imports")
 check(hasattr(app, "build_exit_strategy_confidence"), "app exit confidence function imports")
@@ -296,6 +330,22 @@ imported_fields, skipped_fields = app.apply_apify_zillow_import(normalized)
 check("asking_price" in skipped_fields, "manual override wins during Apify/Zillow import")
 check("address" in imported_fields and "rent" not in skipped_fields, "Apify/Zillow import fills blank/default lead fields")
 check(app.st.session_state["apify_field_sources"].get("asking_price") == "price", "Apify/Zillow import stores field source map")
+
+app.st.session_state["beds"] = 2
+app.st.session_state["address"] = ""
+manual_override_payload = data_sources.universal_listing_from_record(
+    {
+        "address": "222 Manual Override Rd",
+        "price": "$55,000",
+        "bedrooms": 3,
+        "bathrooms": 1,
+        "livingArea": 900,
+    },
+    source="MLS / Manual",
+)
+universal_imported, universal_skipped, universal_conflicts = lead_intake_ui._apply_universal_listing_import(app.st, manual_override_payload)
+check(app.st.session_state["beds"] == 2 and "beds" in universal_skipped, "universal listing manual override wins")
+check("Bed count conflict" in universal_conflicts, "universal listing flags bed count conflict")
 
 
 def set_exit_inputs(
