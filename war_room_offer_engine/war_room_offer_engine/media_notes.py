@@ -5,10 +5,6 @@ import tempfile
 from typing import List, Any
 
 from PIL import Image
-try:
-    import cv2
-except ImportError:
-    cv2 = None
 from openai import OpenAI
 
 try:
@@ -28,6 +24,7 @@ MODEL_NAME = "gpt-4.1-mini"
 MAX_PHOTOS_TO_ANALYZE = 40
 PHOTO_BATCH_SIZE = 6
 MAX_VIDEO_FRAMES = 10
+OPENCV_UNAVAILABLE_MESSAGE = "Video/photo frame analysis unavailable because OpenCV is not installed."
 
 
 def _get_openai_client():
@@ -76,9 +73,19 @@ def _save_uploaded_video(uploaded_file: Any) -> str:
         return tmp.name
 
 
-def _extract_video_frames(video_path: str, max_frames: int = MAX_VIDEO_FRAMES) -> List[str]:
+def _load_cv2():
+    try:
+        import cv2
+
+        return cv2
+    except Exception:
+        return None
+
+
+def _extract_video_frames(video_path: str, max_frames: int = MAX_VIDEO_FRAMES) -> List[str] | None:
+    cv2 = _load_cv2()
     if cv2 is None:
-        return []
+        return None
 
     cap = cv2.VideoCapture(video_path)
 
@@ -177,6 +184,8 @@ def _analyze_video_frames(client: OpenAI, video_file: Any) -> str:
     video_path = _save_uploaded_video(video_file)
     frames = _extract_video_frames(video_path, max_frames=MAX_VIDEO_FRAMES)
 
+    if frames is None:
+        return OPENCV_UNAVAILABLE_MESSAGE
     if not frames:
         return "Video was uploaded, but no readable frames could be extracted."
 
