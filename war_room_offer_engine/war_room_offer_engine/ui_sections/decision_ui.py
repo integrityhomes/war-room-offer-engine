@@ -145,6 +145,28 @@ def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
             asking_price=asking_price_value,
             contract_price=contract_price_value,
         )
+        deal_log_row.update(
+            {
+                "universal_listing_source": st.session_state.get("universal_listing_source", ""),
+                "universal_listing_url": st.session_state.get("universal_listing_url", ""),
+                "universal_import_method": st.session_state.get("universal_import_method", ""),
+                "imported_listing_source": st.session_state.get("imported_listing_source", ""),
+                "imported_listing_price": st.session_state.get("imported_listing_price", 0),
+                "imported_beds": st.session_state.get("imported_beds", 0),
+                "imported_baths": st.session_state.get("imported_baths", 0),
+                "imported_sqft": st.session_state.get("imported_sqft", 0),
+                "imported_dom": st.session_state.get("imported_dom", 0),
+                "imported_agent_name": st.session_state.get("imported_agent_name", ""),
+                "imported_agent_phone": st.session_state.get("imported_agent_phone", ""),
+                "imported_agent_email": st.session_state.get("imported_agent_email", ""),
+                "imported_brokerage": st.session_state.get("imported_brokerage", ""),
+                "imported_listing_status": st.session_state.get("imported_listing_status", ""),
+                "imported_source_confidence": st.session_state.get("imported_source_confidence", ""),
+                "imported_missing_fields": "; ".join(st.session_state.get("universal_import_missing_fields", []) or []),
+                "imported_conflict_flags": "; ".join(st.session_state.get("universal_import_conflict_flags", []) or []),
+                "field_source_map_json": st.session_state.get("field_source_map_json", ""),
+            }
+        )
         render_save_deal_analysis(deal_log_row)
 
         st.divider()
