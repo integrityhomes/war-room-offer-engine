@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 try:
-    from data_sources import fetch_universal_apify_dataset, normalize_one_load_lead
+    from data_sources import fetch_universal_apify_dataset
+    from one_load_sources import normalize_one_load_lead
 except ImportError:
     try:
-        from ..data_sources import fetch_universal_apify_dataset, normalize_one_load_lead
+        from ..data_sources import fetch_universal_apify_dataset
+        from ..one_load_sources import normalize_one_load_lead
     except ImportError:
-        from war_room_offer_engine.data_sources import fetch_universal_apify_dataset, normalize_one_load_lead
+        from war_room_offer_engine.data_sources import fetch_universal_apify_dataset
+        from war_room_offer_engine.one_load_sources import normalize_one_load_lead
 
 
 ONE_LOAD_FIELD_MAP = {
@@ -305,24 +308,22 @@ def _run_one_load(st, ui, csv_record: dict | None, exit_mode: str) -> dict:
         repair_notes=st.session_state.get("repair_notes", ""),
         assumptions=assumptions,
     )
-    simple_answer = ui.build_simple_deal_answer(
-        result,
-        deal,
-        normalized.get("missing_critical_fields", []),
-        result.get("risks", []),
-    )
-    offer_range = simple_answer.get("safe_offer_range", {})
+    best = result.get("best", {}) if isinstance(result, dict) else {}
+    final_decision = final_summary.get("final_decision", result.get("best_exit", "Needs Human Review"))
+    team_action = final_summary.get("team_action", "")
+    first_offer = best.get("offer_to_send") or best.get("target_offer_low") or 0
+    internal_max = best.get("max_offer") or best.get("target_offer_high") or 0
     normalized.update(
         {
             "imported_fields": imported,
             "skipped_manual_fields": skipped,
             "conflict_flags": conflicts,
-            "final_simple_answer": simple_answer.get("plain_answer", ""),
-            "first_offer": offer_range.get("first_offer", 0),
-            "internal_max": offer_range.get("hard_max", 0),
-            "do_not_exceed": offer_range.get("do_not_exceed", 0),
-            "best_next_move": simple_answer.get("best_next_move", ""),
-            "final_decision": final_summary.get("final_decision", ""),
+            "final_simple_answer": final_decision,
+            "first_offer": first_offer,
+            "internal_max": internal_max,
+            "do_not_exceed": internal_max,
+            "best_next_move": team_action,
+            "final_decision": final_decision,
             "arv_source": st.session_state.get("arv_source_used", st.session_state.get("value_source", "Missing")),
             "arv_confidence": st.session_state.get("arv_confidence", "Not enough data"),
             "rent_confidence": "Weak" if float(st.session_state.get("rent", 0) or 0) <= 0 else st.session_state.get("rental_demand_confidence", "Unknown"),
