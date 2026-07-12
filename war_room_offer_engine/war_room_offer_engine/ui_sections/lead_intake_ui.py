@@ -1,5 +1,156 @@
 from __future__ import annotations
 
+import json
+
+try:
+    from data_sources import (
+        fetch_universal_apify_dataset,
+        parse_universal_listing_text,
+        run_universal_apify_actor,
+        universal_listing_from_record,
+    )
+except ImportError:
+    try:
+        from ..data_sources import (
+            fetch_universal_apify_dataset,
+            parse_universal_listing_text,
+            run_universal_apify_actor,
+            universal_listing_from_record,
+        )
+    except ImportError:
+        from war_room_offer_engine.data_sources import (
+            fetch_universal_apify_dataset,
+            parse_universal_listing_text,
+            run_universal_apify_actor,
+            universal_listing_from_record,
+        )
+
+
+UNIVERSAL_FIELD_MAP = {
+    "address": "address",
+    "city": "city",
+    "state": "state",
+    "zip": "zip",
+    "market": "market",
+    "property_type": "property_type",
+    "beds": "beds",
+    "baths": "baths",
+    "sqft": "sqft",
+    "lot_size": "lot_size",
+    "year_built": "year_built",
+    "asking_price": "asking_price",
+    "status": "status",
+    "days_on_market": "days_on_market",
+    "listing_url": "listing_url",
+    "listing_agent_name": "listing_agent_name",
+    "listing_agent_phone": "listing_agent_phone",
+    "listing_agent_email": "listing_agent_email",
+    "listing_brokerage": "listing_brokerage",
+    "sheet_arv": "sheet_arv",
+    "rent": "rent",
+    "tax_assessed_value": "tax_assessed_value",
+    "taxes": "taxes",
+    "last_sale_date": "last_sale_date",
+    "last_sale_price": "last_sale_price",
+}
+
+UNIVERSAL_DEFAULT_VALUES = {
+    "beds": 3.0,
+    "baths": 1.0,
+    "sqft": 1000,
+    "asking_price": 35000,
+    "rent": 900,
+    "status": "Unknown",
+    "lead_source": "Manual",
+}
+
+
+def _has_manual_value(st, state_key: str) -> bool:
+    value = st.session_state.get(state_key)
+    if value in [None, "", 0, 0.0, [], {}]:
+        return False
+    default_value = UNIVERSAL_DEFAULT_VALUES.get(state_key)
+    if default_value is not None and str(value) == str(default_value):
+        return False
+    return True
+
+
+def _apply_universal_listing_import(st, payload: dict) -> tuple[list[str], list[str], list[str]]:
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    source = payload.get("source", "Universal Listing Import")
+    imported: list[str] = []
+    skipped: list[str] = []
+    conflicts: list[str] = list(payload.get("conflict_flags", []))
+    field_sources = dict(st.session_state.get("apify_field_sources", {}) or {})
+    for import_key, state_key in UNIVERSAL_FIELD_MAP.items():
+        value = data.get(import_key)
+        if value in [None, "", 0, 0.0, [], {}]:
+            continue
+        current = st.session_state.get(state_key)
+        if _has_manual_value(st, state_key) and str(current) != str(value):
+            skipped.append(state_key)
+            if state_key == "beds":
+                conflicts.append("Bed count conflict")
+            elif state_key == "baths":
+                conflicts.append("Bath count conflict")
+            continue
+        st.session_state[state_key] = value
+        imported.append(state_key)
+        field_sources[state_key] = source
+    st.session_state["apify_field_sources"] = field_sources
+    st.session_state["field_source_map_json"] = json.dumps(field_sources)
+    st.session_state["universal_import_status"] = "Imported" if imported else "Needs manual entry."
+    st.session_state["universal_imported_fields"] = imported
+    st.session_state["universal_skipped_manual_fields"] = skipped
+    st.session_state["universal_import_conflict_flags"] = sorted(set(conflicts))
+    st.session_state["universal_import_missing_fields"] = payload.get("missing_fields", [])
+    st.session_state["imported_listing_source"] = source
+    st.session_state["imported_source_confidence"] = payload.get("source_confidence", "Weak")
+    st.session_state["imported_manual_review_needed"] = payload.get("manual_review_needed", "Yes")
+    st.session_state["imported_listing_price"] = data.get("asking_price", 0)
+    st.session_state["imported_beds"] = data.get("beds", 0)
+    st.session_state["imported_baths"] = data.get("baths", 0)
+    st.session_state["imported_sqft"] = data.get("sqft", 0)
+    st.session_state["imported_dom"] = data.get("days_on_market", 0)
+    st.session_state["imported_agent_name"] = data.get("listing_agent_name", "")
+    st.session_state["imported_agent_phone"] = data.get("listing_agent_phone", "")
+    st.session_state["imported_agent_email"] = data.get("listing_agent_email", "")
+    st.session_state["imported_brokerage"] = data.get("listing_brokerage", "")
+    st.session_state["imported_listing_status"] = data.get("status", "")
+    return imported, skipped, conflicts
+
+
+def _store_universal_payload(st, payload: dict) -> None:
+    st.session_state["universal_listing_payload"] = payload
+    st.session_state["universal_listing_preview"] = [payload] if payload else []
+    st.session_state["universal_last_error"] = "; ".join(payload.get("errors", [])) if payload else "Needs manual entry."
+
+
+def _render_universal_listing_summary(st) -> None:
+    payload = st.session_state.get("universal_listing_payload", {}) or {}
+    data = payload.get("data", {})
+    if not payload:
+        return
+    st.markdown("#### Imported Listing Summary")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Source", payload.get("source", ""))
+    c2.metric("Price", f"${float(data.get('asking_price', 0) or 0):,.0f}")
+    c3.metric("Beds/Baths", f"{data.get('beds', '')}/{data.get('baths', '')}")
+    c4.metric("Sqft", f"{float(data.get('sqft', 0) or 0):,.0f}" if data.get("sqft") else "Needs manual entry.")
+    st.write(
+        {
+            "Address": data.get("address", "Needs manual entry."),
+            "DOM": data.get("days_on_market", "Needs manual entry."),
+            "Agent": data.get("listing_agent_name", "Needs manual entry."),
+            "Listing URL": data.get("listing_url", "Needs manual entry."),
+            "Missing fields": ", ".join(payload.get("missing_fields", [])) or "None",
+            "Data confidence": payload.get("source_confidence", "Weak"),
+            "Manual review needed?": payload.get("manual_review_needed", "Yes"),
+        }
+    )
+    for warning in st.session_state.get("universal_import_conflict_flags", payload.get("conflict_flags", [])):
+        st.warning(warning)
+
 
 def render_lead_intake_section(st, ui) -> None:
 
@@ -58,6 +209,91 @@ def render_lead_intake_section(st, ui) -> None:
         with intake_cols[2]:
             for provider in provider_connection_status():
                 st.write(("Connected: " if provider["connected"] else "API not connected - ") + provider["provider"])
+
+        st.markdown("### Universal Listing Import")
+        st.caption("Import one on-market listing from approved APIs, Apify, uploaded CSV, pasted text, or manual entry. No direct scraping.")
+        u1, u2, u3 = st.columns(3)
+        with u1:
+            st.selectbox(
+                "Listing Source",
+                ["Zillow", "Redfin", "Realtor.com", "MLS / Manual", "XLeads", "Apify Dataset", "Agent Sent Listing", "County / Tax Record", "Other"],
+                key="universal_listing_source",
+            )
+            st.text_input("Listing URL", key="universal_listing_url")
+        with u2:
+            st.selectbox(
+                "Import Method",
+                ["Parse pasted text only", "Pull from Apify dataset", "Run Apify actor from listing URL", "Manual only"],
+                key="universal_import_method",
+            )
+            st.text_input("Apify Actor ID / Dataset ID", key="universal_apify_id")
+        with u3:
+            parse_universal = st.button("Parse Listing Text", type="secondary")
+            pull_universal = st.button("Pull From Apify Dataset", type="secondary")
+            run_universal = st.button("Run Apify Actor + Import", type="secondary")
+            clear_universal = st.button("Clear Imported Lead", type="secondary")
+        st.text_area("Paste Listing Text", height=160, key="universal_listing_text")
+
+        if clear_universal:
+            for key in [
+                "universal_listing_payload",
+                "universal_listing_preview",
+                "universal_import_status",
+                "universal_imported_fields",
+                "universal_skipped_manual_fields",
+                "universal_import_conflict_flags",
+                "universal_import_missing_fields",
+                "universal_last_error",
+            ]:
+                st.session_state.pop(key, None)
+            st.success("Imported listing cleared. Existing manual field values were left unchanged.")
+
+        if parse_universal:
+            payload = parse_universal_listing_text(
+                st.session_state.get("universal_listing_source", ""),
+                st.session_state.get("universal_listing_url", ""),
+                st.session_state.get("universal_listing_text", ""),
+            )
+            _store_universal_payload(st, payload)
+            imported, skipped, _ = _apply_universal_listing_import(st, payload)
+            st.success("Imported fields: " + (", ".join(imported) if imported else "Needs manual entry."))
+            if skipped:
+                st.info("Manual overrides kept: " + ", ".join(skipped))
+
+        if pull_universal:
+            result = fetch_universal_apify_dataset(
+                st.session_state.get("universal_apify_id", ""),
+                source=st.session_state.get("universal_listing_source", "Apify Dataset"),
+                limit=1,
+            )
+            rows = result.get("rows", []) if result.get("ok") else []
+            if rows:
+                _store_universal_payload(st, rows[0])
+                imported, skipped, _ = _apply_universal_listing_import(st, rows[0])
+                st.success("Imported fields: " + (", ".join(imported) if imported else "Needs manual entry."))
+                if skipped:
+                    st.info("Manual overrides kept: " + ", ".join(skipped))
+            else:
+                st.warning(result.get("error") or "; ".join(result.get("errors", [])) or "Needs manual entry.")
+
+        if run_universal:
+            result = run_universal_apify_actor(
+                st.session_state.get("universal_apify_id", ""),
+                st.session_state.get("universal_listing_url", ""),
+                source=st.session_state.get("universal_listing_source", "Apify Dataset"),
+                limit=1,
+            )
+            rows = result.get("rows", []) if result.get("ok") else []
+            if rows:
+                _store_universal_payload(st, rows[0])
+                imported, skipped, _ = _apply_universal_listing_import(st, rows[0])
+                st.success("Imported fields: " + (", ".join(imported) if imported else "Needs manual entry."))
+                if skipped:
+                    st.info("Manual overrides kept: " + ", ".join(skipped))
+            else:
+                st.warning(result.get("error") or "; ".join(result.get("errors", [])) or "Needs manual entry.")
+
+        _render_universal_listing_summary(st)
 
         st.markdown("### Apify / Zillow Import")
         st.caption("Preview Apify Zillow data before import. Imported fields fill blank/default fields only; manual edits stay protected.")
