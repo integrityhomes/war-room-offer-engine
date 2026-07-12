@@ -168,7 +168,7 @@ def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
                 "one_load_lead_type": st.session_state.get("one_load_lead_type", ""),
                 "one_load_lead_source": st.session_state.get("one_load_lead_source", ""),
                 "one_load_input_method": st.session_state.get("one_load_input_method", ""),
-                "one_load_input_value": st.session_state.get("one_load_listing_url") or st.session_state.get("one_load_property_address") or st.session_state.get("one_load_apify_dataset_id", ""),
+                "one_load_input_value": st.session_state.get("one_load_listing_url") or st.session_state.get("one_load_property_address") or st.session_state.get("one_load_apify_dataset", ""),
                 "seller_name": st.session_state.get("seller_name", ""),
                 "seller_phone": st.session_state.get("seller_phone", ""),
                 "seller_email": st.session_state.get("seller_email", ""),
