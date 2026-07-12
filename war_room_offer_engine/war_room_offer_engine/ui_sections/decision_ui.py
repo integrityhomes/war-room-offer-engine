@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+try:
+    from ui_sections.rent_fallback_ui import render_rent_fallback_section
+except ImportError:
+    try:
+        from .rent_fallback_ui import render_rent_fallback_section
+    except ImportError:
+        from war_room_offer_engine.ui_sections.rent_fallback_ui import render_rent_fallback_section
+
 
 def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
 
@@ -32,6 +40,7 @@ def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
     wholesale_buyer_percent_arv = ui.wholesale_buyer_percent_arv
     st.text_area("Seller/agent notes, condition, occupancy, motivation", height=120, key="notes")
     st.caption(f"Current source: {st.session_state.get('source_mode')} / {st.session_state.get('lead_source')}")
+    render_rent_fallback_section(st, ui)
 
     analyze = st.button("Analyze Deal", type="primary")
 
@@ -199,7 +208,7 @@ def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
         m1.metric("Deal Grade", result["grade"])
         m2.metric("Best Exit", result["best_exit"])
         m3.metric("First Offer", money(best.get("offer_to_send", best.get("target_offer_low", 0))))
-        m4.metric("Internal Max", money(best["max_offer"]))
+        m4.metric("Internal Max", money(best["max_offer"])
 
         c1, c2 = st.columns(2)
         with c1:
