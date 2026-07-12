@@ -26,6 +26,14 @@ except ImportError:
             universal_listing_from_record,
         )
 
+try:
+    from zillow_url_import import is_zillow_url, pull_zillow_listing
+except ImportError:
+    try:
+        from .zillow_url_import import is_zillow_url, pull_zillow_listing
+    except ImportError:
+        from war_room_offer_engine.zillow_url_import import is_zillow_url, pull_zillow_listing
+
 
 def parse_seller_notes(text: str) -> dict[str, Any]:
     compact = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -105,6 +113,44 @@ def _fill_money_from_seller_notes(data: dict[str, Any], text: str) -> None:
             data["rent"] = money_to_float(rent_match.group(1))
 
 
+def _store_live_zillow_extras(data: dict[str, Any]) -> None:
+    """Store Zillow fields the legacy One-Load field map does not yet import.
+
+    Core deal fields still flow through apply_one_load_import(), which preserves
+    user-entered manual values. This helper only fills blank extra fields.
+    """
+    try:
+        import streamlit as st
+    except Exception:
+        return
+
+    extras = {
+        "property_type": data.get("property_type"),
+        "lot_size": data.get("lot_size"),
+        "year_built": data.get("year_built"),
+        "listing_brokerage": data.get("listing_brokerage"),
+        "sheet_arv": data.get("sheet_arv") or data.get("arv"),
+        "last_sale_date": data.get("last_sale_date") or data.get("sold_date"),
+        "last_sale_price": data.get("last_sale_price") or data.get("sold_price"),
+        "zpid": data.get("zpid"),
+        "primary_photo": data.get("primary_photo"),
+        "listing_photos": data.get("listing_photos"),
+    }
+    for key, value in extras.items():
+        if value in [None, "", 0, 0.0, [], {}]:
+            continue
+        current = st.session_state.get(key)
+        if current in [None, "", 0, 0.0, [], {}]:
+            st.session_state[key] = value
+
+    if extras.get("sheet_arv") not in [None, "", 0, 0.0]:
+        current_source = str(st.session_state.get("value_source") or "")
+        if current_source in ["", "Missing"]:
+            st.session_state["value_source"] = "Zillow/Apify AVM"
+            st.session_state["arv_source_used"] = "Zillow/Apify AVM"
+            st.session_state["arv_confidence"] = "AVM only"
+
+
 def one_load_review_before_offer_checklist() -> list[str]:
     return [
         "Verify bed/bath count",
@@ -149,12 +195,36 @@ def normalize_one_load_lead(payload: dict[str, Any]) -> dict[str, Any]:
     combined_text = "\n".join(part for part in [address, listing_url, listing_text, seller_notes] if part)
     seller = parse_seller_notes(seller_notes or listing_text)
 
+    live_zillow_result: dict[str, Any] = {}
+    if not record and listing_url and is_zillow_url(listing_url):
+        live_zillow_result = pull_zillow_listing(listing_url, address=address, limit=10)
+        if live_zillow_result.get("ok"):
+            record = dict(live_zillow_result.get("record", {}) or {})
+            _store_live_zillow_extras(record)
+
     if record:
         universal = universal_listing_from_record(record, source=lead_source, listing_url=listing_url)
     else:
         universal = parse_universal_listing_text(lead_source, listing_url, combined_text)
 
     data = dict(universal.get("data", {}) or {})
+    if record:
+        for key in [
+            "property_type",
+            "lot_size",
+            "year_built",
+            "listing_brokerage",
+            "zpid",
+            "primary_photo",
+            "listing_photos",
+        ]:
+            if record.get(key) not in [None, "", 0, 0.0, [], {}]:
+                data[key] = record.get(key)
+        if data.get("sheet_arv") in [None, "", 0, 0.0]:
+            data["sheet_arv"] = record.get("arv") or record.get("zestimate") or 0
+        if data.get("rent") in [None, "", 0, 0.0]:
+            data["rent"] = record.get("rent") or record.get("rentZestimate") or 0
+
     parsed_from_notes = seller.get("parsed_listing", {})
     for key, parsed_key in [
         ("address", "address"),
@@ -210,6 +280,8 @@ def normalize_one_load_lead(payload: dict[str, Any]) -> dict[str, Any]:
         data_sources_used.append("Listing URL")
     if record:
         data_sources_used.append("Imported record")
+    if live_zillow_result.get("ok"):
+        data_sources_used.append(live_zillow_result.get("source", "Live Apify Zillow pull"))
     if listing_text:
         data_sources_used.append("Pasted listing text")
     if seller_notes:
@@ -219,6 +291,12 @@ def normalize_one_load_lead(payload: dict[str, Any]) -> dict[str, Any]:
     rent_confidence = "Weak" if data.get("rent") in ["", 0, 0.0, None] else "Medium"
     repair_source = "Seller notes" if seller.get("seller_repair_notes") else "Manual" if payload.get("manual_repair_estimate") else "Missing"
     success = bool(data.get("address") or data.get("asking_price") or seller_notes or listing_text or record)
+    warnings = list(universal.get("warnings", [])) + list(universal.get("conflict_flags", []))
+    warnings.extend(live_zillow_result.get("warnings", []) if live_zillow_result else [])
+    errors = list(universal.get("errors", []))
+    if live_zillow_result and not live_zillow_result.get("ok"):
+        errors.append(str(live_zillow_result.get("error") or "Zillow live pull failed."))
+
     summary = {
         "one_load_run_success": "Yes" if success else "No",
         "lead_type": lead_type,
@@ -236,9 +314,13 @@ def normalize_one_load_lead(payload: dict[str, Any]) -> dict[str, Any]:
         "buyer_demand_confidence": payload.get("buyer_demand_confidence", "Unknown"),
         "deal_protection_status": payload.get("deal_protection_mode", "Yes"),
         "field_sources": universal.get("field_sources", {}),
-        "warnings": universal.get("warnings", []) + universal.get("conflict_flags", []),
-        "errors": universal.get("errors", []),
+        "warnings": warnings,
+        "errors": errors,
         "manual_review_needed": "Yes" if missing or lead_type != "On-market listing" else universal.get("manual_review_needed", "Yes"),
+        "live_zillow_pull_status": "Connected" if live_zillow_result.get("ok") else "Failed" if live_zillow_result else "Not used",
+        "live_zillow_source": live_zillow_result.get("source", "") if live_zillow_result else "",
+        "listing_photos": data.get("listing_photos", []),
+        "primary_photo": data.get("primary_photo", ""),
     }
     summary["status_checklist"] = one_load_status_checklist(summary)
     summary["review_before_offer_checklist"] = one_load_review_before_offer_checklist()
