@@ -36,11 +36,7 @@ FIELD_ALIASES: dict[str, list[str]] = {
         "hdpData.homeInfo.price",
     ],
     "rent": ["rentZestimate", "rentEstimate", "estimatedRent", "hdpData.homeInfo.rentZestimate"],
-    "arv": ["zestimate", "estimatedValue", "homeValue", "hdpData.homeInfo.zestimate"],
-    "tax_assessed_value": ["taxAssessedValue", "taxAssessment", "assessedValue", "hdpData.homeInfo.taxAssessedValue"],
-    "taxes": ["annualTaxes", "propertyTax", "taxAnnualAmount", "hdpData.homeInfo.taxHistory.0.taxPaid"],
-    "last_sale_date": ["lastSoldDate", "lastSaleDate", "dateSold.date", "hdpData.homeInfo.dateSold"],
-    "last_sale_price": ["lastSoldPrice", "lastSalePrice", "dateSold.price", "hdpData.homeInfo.lastSoldPrice"],
+    "arv": ["zestimate", "redfinEstimate", "realtorEstimate", "estimatedValue", "homeValue", "hdpData.homeInfo.zestimate"],
     "beds": ["beds", "bedrooms", "bedroomsTotal", "hdpData.homeInfo.bedrooms"],
     "baths": ["baths", "bathrooms", "bathroomsTotal", "hdpData.homeInfo.bathrooms"],
     "sqft": ["sqft", "livingArea", "livingAreaValue", "area", "hdpData.homeInfo.livingArea"],
@@ -49,7 +45,7 @@ FIELD_ALIASES: dict[str, list[str]] = {
     "property_type": ["propertyType", "homeType", "hdpData.homeInfo.homeType"],
     "days_on_market": ["daysOnZillow", "daysOnMarket", "dom", "hdpData.homeInfo.daysOnZillow"],
     "status": ["status", "homeStatus", "listingStatus", "hdpData.homeInfo.homeStatus"],
-    "listing_url": ["url", "detailUrl", "hdpUrl", "zillowUrl", "listingUrl"],
+    "listing_url": ["url", "detailUrl", "hdpUrl", "zillowUrl", "redfinUrl", "realtorUrl", "listingUrl"],
     "zpid": ["zpid", "hdpData.homeInfo.zpid"],
     "latitude": ["latitude", "lat", "hdpData.homeInfo.latitude"],
     "longitude": ["longitude", "lng", "lon", "hdpData.homeInfo.longitude"],
@@ -57,8 +53,8 @@ FIELD_ALIASES: dict[str, list[str]] = {
     "listing_agent_phone": ["agentPhone", "brokerPhone", "listingAgent.phone", "attributionInfo.agentPhoneNumber"],
     "listing_brokerage": ["brokerageName", "brokerName", "attributionInfo.brokerName"],
     "listing_agent_email": ["agentEmail", "listingAgent.email", "attributionInfo.agentEmail"],
-    "source_name": ["sourceName", "source", "provider", "sellerType"],
-    "source_confidence": ["sourceConfidence", "confidence", "matchConfidence"],
+    "taxes": ["taxes", "annualTaxes", "propertyTaxes", "taxHistory.0.taxPaid"],
+    "tax_assessed_value": ["taxAssessedValue", "assessedValue", "taxAssessment", "taxHistory.0.value"],
     "sold_price": ["soldPrice", "lastSoldPrice", "lastSalePrice", "dateSold.price", "hdpData.homeInfo.lastSoldPrice"],
     "sold_date": ["soldDate", "lastSoldDate", "lastSaleDate", "dateSold.date", "hdpData.homeInfo.dateSold"],
     "distance_miles": ["distance", "distanceMiles"],
@@ -67,6 +63,19 @@ FIELD_ALIASES: dict[str, list[str]] = {
 
 
 STANDARD_FIELDS = list(FIELD_ALIASES.keys())
+
+
+def parse_apify_dataset_id(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"/datasets/([^/?#]+)", text)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"datasetId=([^&#]+)", text)
+    if match:
+        return match.group(1).strip()
+    return text.rstrip("/").split("/")[-1].split("?")[0].split("#")[0].strip()
 
 
 def get_secret(name: str, default: str = "") -> str:
@@ -175,19 +184,7 @@ def normalize_zillow_record(record: dict[str, Any]) -> dict[str, Any]:
         if value in [None, "", [], {}]:
             continue
         field_sources[field_name] = source_key
-        if field_name in [
-            "asking_price",
-            "rent",
-            "arv",
-            "tax_assessed_value",
-            "taxes",
-            "last_sale_price",
-            "beds",
-            "baths",
-            "sqft",
-            "days_on_market",
-            "year_built",
-        ]:
+        if field_name in ["asking_price", "rent", "arv", "beds", "baths", "sqft", "taxes", "tax_assessed_value", "days_on_market", "year_built"]:
             number = money_to_float(value)
             data[field_name] = number if number > 0 else value
         else:
