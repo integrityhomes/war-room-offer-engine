@@ -389,6 +389,57 @@ result = rules.analyze_deal(deal, assumptions)
 check(result["best_exit"] == "Wholesale", "wholesale path ignores slow flip max buy price")
 check(result["wholesale"]["estimated_fee_at_ask"] >= assumptions.exception_assignment_fee, "wholesale fee math works")
 
+seller_only_rent_deal = rules.DealInput(
+    address="125 Rent Risk Ave",
+    market="Southside VA",
+    lead_type="Seller",
+    exit_mode="Slow Flip Only",
+    asking_price=25000,
+    rent=900,
+    beds=2,
+    baths=1,
+    sqft=900,
+    taxes=0,
+    status="Active",
+    occupancy="Vacant",
+    livable="Yes",
+    days_on_market=0,
+    notes="Seller-stated rent only",
+    arv=0,
+    repairs=0,
+    rent_source="Seller-stated rent",
+    rent_confidence="Weak / seller stated only",
+    rent_verification_needed="Yes",
+)
+seller_only_result = rules.analyze_deal(seller_only_rent_deal, assumptions)
+check(seller_only_result["best_exit"] == "Needs Human Review", "seller-stated rent blocks clean slow flip")
+check(seller_only_result["slow_flip"]["rent_verification_needed"] == "Yes", "weak rent marks slow flip rent verification needed")
+
+verified_rent_deal = rules.DealInput(
+    address="126 Rent Verified Ave",
+    market="Southside VA",
+    lead_type="Seller",
+    exit_mode="Slow Flip Only",
+    asking_price=25000,
+    rent=900,
+    beds=2,
+    baths=1,
+    sqft=900,
+    taxes=0,
+    status="Active",
+    occupancy="Vacant",
+    livable="Yes",
+    days_on_market=0,
+    notes="Manual rent comps verified",
+    arv=0,
+    repairs=0,
+    rent_source="Manual rent comps",
+    rent_confidence="Medium fallback comps",
+    rent_verification_needed="No",
+)
+verified_rent_result = rules.analyze_deal(verified_rent_deal, assumptions)
+check(verified_rent_result["best_exit"] == "Slow Flip", "verified fallback rent can allow slow flip math")
+
 with contextlib.redirect_stderr(io.StringIO()):
     app = import_first("app", "war_room_offer_engine.app", "war_room_offer_engine.war_room_offer_engine.app")
 lead_intake_ui = import_first(
@@ -407,6 +458,36 @@ check(hasattr(app, "build_exit_strategy_confidence"), "app exit confidence funct
 check(hasattr(app, "build_dispo_test_summary"), "app dispo test summary function imports")
 check(hasattr(app, "generate_buyer_blast_messages"), "app buyer blast generator imports")
 check(hasattr(app, "apply_apify_zillow_import"), "app Apify/Zillow import function imports")
+check(hasattr(app, "apply_rent_fallback_state"), "app rent fallback function imports")
+
+for key in [
+    "rent_source",
+    "rent_confidence",
+    "rent_fallback_mode",
+    "manual_rent_comp_count",
+    "manual_rent_comp_average",
+    "rent_verification_needed",
+    "slow_flip_rent_risk",
+]:
+    app.st.session_state.pop(key, None)
+for idx in range(1, 4):
+    app.st.session_state[f"manual_rent_comp_{idx}_rent"] = 0
+app.st.session_state["rent"] = 0
+missing_rent_state = app.apply_rent_fallback_state()
+check(missing_rent_state["rent_source"] == "Missing / RentCast unavailable", "missing RentCast rent enters fallback mode")
+check(missing_rent_state["rent_verification_needed"] == "Yes", "missing RentCast rent requires verification")
+
+for idx, rent in enumerate([800, 850, 900], start=1):
+    app.st.session_state[f"manual_rent_comp_{idx}_area"] = f"Rent comp {idx}"
+    app.st.session_state[f"manual_rent_comp_{idx}_rent"] = rent
+    app.st.session_state[f"manual_rent_comp_{idx}_confidence"] = "Verified listing"
+    app.st.session_state[f"manual_rent_comp_{idx}_source"] = "Manual rent comps"
+app.st.session_state["manual_rent_confidence"] = "Strong verified rent comps"
+manual_rent_state = app.apply_rent_fallback_state()
+check(manual_rent_state["manual_rent_comp_count"] == 3, "manual rent comp count is tracked")
+check(manual_rent_state["manual_rent_comp_average"] == 850, "manual rent comp average calculates")
+check(manual_rent_state["rent_confidence"] == "Strong verified rent comps", "manual rent comps can verify rent")
+check(manual_rent_state["rent_verification_needed"] == "No", "verified manual rent comps clear fallback warning")
 
 app.st.session_state["asking_price"] = 99000
 app.st.session_state["rent"] = app.FIELD_DEFAULTS["rent"]

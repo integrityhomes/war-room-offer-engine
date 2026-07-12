@@ -18,6 +18,8 @@ try:
     from ui_sections.deal_protection_ui import render_deal_protection_section
     from ui_sections.decision_ui import render_decision_section
     from ui_sections.lead_intake_ui import render_lead_intake_section
+    from ui_sections.one_load_deal_ui import render_one_load_deal_section
+    from ui_sections.rent_fallback_ui import render_rent_fallback_section
     from ui_sections.repair_ui import render_repair_section
 except ImportError:
     try:
@@ -26,6 +28,8 @@ except ImportError:
         from .ui_sections.deal_protection_ui import render_deal_protection_section
         from .ui_sections.decision_ui import render_decision_section
         from .ui_sections.lead_intake_ui import render_lead_intake_section
+        from .ui_sections.one_load_deal_ui import render_one_load_deal_section
+        from .ui_sections.rent_fallback_ui import render_rent_fallback_section
         from .ui_sections.repair_ui import render_repair_section
     except ImportError:
         from war_room_offer_engine.ui_sections.buyer_demand_ui import render_buyer_demand_section
@@ -33,6 +37,8 @@ except ImportError:
         from war_room_offer_engine.ui_sections.deal_protection_ui import render_deal_protection_section
         from war_room_offer_engine.ui_sections.decision_ui import render_decision_section
         from war_room_offer_engine.ui_sections.lead_intake_ui import render_lead_intake_section
+        from war_room_offer_engine.ui_sections.one_load_deal_ui import render_one_load_deal_section
+        from war_room_offer_engine.ui_sections.rent_fallback_ui import render_rent_fallback_section
         from war_room_offer_engine.ui_sections.repair_ui import render_repair_section
 
 # Developer validation before merge:
@@ -335,6 +341,16 @@ FIELD_DEFAULTS = {
     "wholesale_buyer_list_strength": "No buyer list yet",
     "slow_flip_buyer_demand": "Unknown",
     "rental_demand_confidence": "Unknown",
+    "rent_source": "Missing / RentCast unavailable",
+    "rent_confidence": "Weak",
+    "rent_fallback_mode": "Yes",
+    "rent_fallback_source": "Manual rent comps",
+    "manual_rent_confidence": "Missing",
+    "manual_rent_comp_count": 0,
+    "manual_rent_comp_average": 0,
+    "seller_stated_rent": 0,
+    "rent_verification_needed": "Yes",
+    "slow_flip_rent_risk": "RentCast could not verify rent. Slow Flip numbers are not reliable until rent comps are manually verified.",
     "exit_strategy_confidence": "Unknown",
     "property_marketability": "Normal",
     "exit_obstacles": [],
@@ -377,6 +393,33 @@ FIELD_DEFAULTS = {
     "dispo_test_recommendation": "Get buyer commitment first",
     "dispo_exit_confidence_after_outreach": "Weak",
     "notes": "",
+    "one_load_lead_type": "On-market listing",
+    "one_load_lead_source": "Zillow",
+    "one_load_input_method": "Property address",
+    "one_load_property_address": "",
+    "one_load_listing_url": "",
+    "one_load_apify_dataset_id": "",
+    "one_load_listing_text": "",
+    "one_load_seller_notes": "",
+    "one_load_asking_price": 0,
+    "one_load_seller_desired_price": 0,
+    "one_load_mortgage_balance": 0,
+    "one_load_occupancy": "Unknown",
+    "one_load_motivation_notes": "",
+    "one_load_timeline": "",
+    "one_load_repairs_mentioned": "",
+    "one_load_access_notes": "",
+    "one_load_contact_name": "",
+    "one_load_contact_phone": "",
+    "one_load_contact_email": "",
+    "one_load_run_success": "No",
+    "one_load_missing_fields": [],
+    "one_load_data_sources_used": [],
+    "one_load_imported_fields": [],
+    "one_load_skipped_manual_fields": [],
+    "one_load_conflict_flags": [],
+    "one_load_final_answer": "",
+    "one_load_next_action": "",
 }
 
 for key, value in FIELD_DEFAULTS.items():
@@ -1118,6 +1161,8 @@ def update_state_from_auto_pull(data: dict) -> None:
         "market": "market",
         "asking_price": "asking_price",
         "rent": "rent",
+        "rent_source": "rent_source",
+        "rent_confidence": "rent_confidence",
         "beds": "beds",
         "baths": "baths",
         "sqft": "sqft",
@@ -1158,6 +1203,110 @@ def update_state_from_auto_pull(data: dict) -> None:
     resolved_arv, value_source = resolve_value_source()
     st.session_state["arv"] = int(resolved_arv) if resolved_arv > 0 else 0
     st.session_state["value_source"] = value_source
+    apply_rent_fallback_state()
+
+
+def manual_rent_comp_records() -> list[dict]:
+    records = []
+    for idx in range(1, 4):
+        rent = safe_float(st.session_state.get(f"manual_rent_comp_{idx}_rent", 0))
+        if rent <= 0:
+            continue
+        records.append(
+            {
+                "area": st.session_state.get(f"manual_rent_comp_{idx}_area", ""),
+                "beds": safe_float(st.session_state.get(f"manual_rent_comp_{idx}_beds", 0)),
+                "baths": safe_float(st.session_state.get(f"manual_rent_comp_{idx}_baths", 0)),
+                "sqft": safe_float(st.session_state.get(f"manual_rent_comp_{idx}_sqft", 0)),
+                "rent": rent,
+                "source": st.session_state.get(f"manual_rent_comp_{idx}_source", ""),
+                "confidence": st.session_state.get(f"manual_rent_comp_{idx}_confidence", ""),
+                "notes": st.session_state.get(f"manual_rent_comp_{idx}_notes", ""),
+            }
+        )
+    return records
+
+
+def resolve_rent_fallback_state() -> dict:
+    comps = manual_rent_comp_records()
+    comp_count = len(comps)
+    comp_average = int(round(sum(comp["rent"] for comp in comps) / comp_count)) if comp_count else 0
+    current_rent = safe_float(st.session_state.get("rent", 0))
+    existing_source = str(st.session_state.get("rent_source", "") or "")
+    existing_confidence = str(st.session_state.get("rent_confidence", "") or "")
+    fallback_source = str(st.session_state.get("rent_fallback_source", "Manual rent comps") or "Manual rent comps")
+    manual_confidence = str(st.session_state.get("manual_rent_confidence", "Missing") or "Missing")
+    seller_rent = safe_float(st.session_state.get("seller_stated_rent", 0))
+
+    effective_rent = comp_average if comp_average > 0 else current_rent
+
+    if comp_count >= 3:
+        rent_source = "Manual rent comps"
+        rent_confidence = "Strong verified rent comps"
+    elif comp_count >= 2:
+        rent_source = "Manual rent comps"
+        rent_confidence = "Medium fallback comps"
+    elif comp_count == 1:
+        rent_source = "Manual rent comps"
+        rent_confidence = "Weak / seller stated only"
+    elif fallback_source == "Seller-stated rent" or seller_rent > 0:
+        rent_source = "Seller-stated rent"
+        rent_confidence = "Weak / seller stated only"
+        if current_rent <= 0 and seller_rent > 0:
+            current_rent = seller_rent
+    elif existing_source and existing_source not in ["Missing", "Missing / RentCast unavailable"]:
+        rent_source = existing_source
+        rent_confidence = existing_confidence or manual_confidence
+    else:
+        rent_source = "Missing / RentCast unavailable"
+        rent_confidence = "Missing" if current_rent <= 0 else "Weak"
+
+    if rent_source != "RentCast" and manual_confidence in ["Weak / seller stated only", "Missing"] and comp_count < 2:
+        rent_confidence = manual_confidence
+
+    weak_confidence = rent_confidence in ["Weak", "Weak / seller stated only", "Missing", "Unknown", "Conflicting data", ""]
+    rentcast_unavailable = rent_source in ["Missing", "Missing / RentCast unavailable"]
+    rent_verification_needed = effective_rent <= 0 or weak_confidence or rentcast_unavailable
+    rent_fallback_mode = rent_verification_needed or rent_source in [
+        "Manual rent comps",
+        "Seller-stated rent",
+        "Zillow rental listings",
+        "Facebook Marketplace rentals",
+        "HUD Fair Market Rent / Section 8 reference",
+        "Property manager estimate",
+        "PropStream rent estimate if available",
+        "Prior known local rent",
+    ]
+    slow_flip_rent_risk = (
+        "RentCast could not verify rent. Slow Flip numbers are not reliable until rent comps are manually verified."
+        if rent_verification_needed
+        else "Manual rent verification complete."
+    )
+
+    return {
+        "rent_source": rent_source,
+        "rent_confidence": rent_confidence,
+        "rent_fallback_mode": "Yes" if rent_fallback_mode else "No",
+        "manual_rent_comp_count": comp_count,
+        "manual_rent_comp_average": comp_average,
+        "rent_verification_needed": "Yes" if rent_verification_needed else "No",
+        "slow_flip_rent_risk": slow_flip_rent_risk,
+    }
+
+
+def apply_rent_fallback_state() -> dict:
+    state = resolve_rent_fallback_state()
+    for key, value in state.items():
+        st.session_state[key] = value
+    if state["rent_confidence"] == "Strong verified rent comps":
+        st.session_state["rental_demand_confidence"] = "Strong verified rents"
+    elif state["rent_confidence"] == "Medium fallback comps":
+        st.session_state["rental_demand_confidence"] = "Some rent comps"
+    elif state["rent_confidence"] in ["Weak", "Weak / seller stated only"]:
+        st.session_state["rental_demand_confidence"] = "Weak rent comps"
+    else:
+        st.session_state["rental_demand_confidence"] = "Unknown"
+    return state
 
 
 def can_import_over_state_field(state_key: str) -> bool:
@@ -1228,6 +1377,7 @@ def apply_apify_zillow_import(row: dict) -> tuple[list[str], list[str]]:
 
 
 def build_missing_info(deal: DealInput, uploaded_files, repair_notes: str) -> list[str]:
+    rent_state = apply_rent_fallback_state()
     missing = []
     if not str(deal.address or "").strip():
         missing.append("Missing address")
@@ -1235,6 +1385,8 @@ def build_missing_info(deal: DealInput, uploaded_files, repair_notes: str) -> li
         missing.append("Missing ARV")
     if deal.rent <= 0:
         missing.append("Missing rent")
+    if rent_state.get("rent_verification_needed") == "Yes":
+        missing.append("Verify rent comps manually")
     if deal.repairs <= 0 and deal.exit_mode in ["Wholesale Only", "Auto"]:
         missing.append("Missing repairs")
     if deal.livable == "Unknown":
@@ -1256,6 +1408,7 @@ def build_extra_risk_flags(
     repair_notes_text = str(st.session_state.get("repair_notes", "") or "").lower()
     all_notes = f"{notes} {repair_notes_text}"
     risks = []
+    rent_state = apply_rent_fallback_state()
 
     if deal.arv <= 0:
         risks.append("ARV missing")
@@ -1277,6 +1430,8 @@ def build_extra_risk_flags(
         risks.append("Roof leak mentioned in notes")
     if deal.livable == "No":
         risks.append("Property not livable")
+    if deal.exit_mode in ["Slow Flip Only", "Auto"] and rent_state.get("rent_verification_needed") == "Yes":
+        risks.append("Slow Flip Rent Risk: RentCast could not verify rent. Slow Flip numbers are not reliable until rent comps are manually verified.")
     slow_flip = result.get("slow_flip", {})
     if (
         deal.exit_mode in ["Slow Flip Only", "Auto"]
@@ -1307,7 +1462,7 @@ def choose_final_decision(
     best_exit = result["best_exit"]
     max_offer = safe_float(best.get("max_offer", 0))
     asking = safe_float(deal.asking_price)
-    critical_missing = {"Missing address", "Missing ARV", "Missing rent"}
+    critical_missing = {"Missing address", "Missing ARV", "Missing rent", "Verify rent comps manually"}
 
     if best_exit == "Pass" or grade == "Pass":
         return "Pass"
@@ -1331,6 +1486,7 @@ def choose_final_decision(
             "Require Human Review",
             "Wholesale Exit Risk",
             "Slow Flip Exit Risk",
+            "Slow Flip Rent Risk",
         ]
     ):
         return "Human Review"
@@ -1388,7 +1544,8 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
     hard_max = safe_float(best.get("max_offer", 0))
     do_not_exceed = hard_max
 
-    critical_missing = {"Missing ARV", "Missing rent", "Missing repairs"}.intersection(missing_info)
+    rent_state = apply_rent_fallback_state()
+    critical_missing = {"Missing ARV", "Missing rent", "Missing repairs", "Verify rent comps manually"}.intersection(missing_info)
     high_repairs = deal.arv > 0 and deal.repairs > max(50000, deal.arv * 0.30)
     functional_risks = result.get("slow_flip", {}).get("functional_risks", [])
     wholesale_percent = safe_float(result.get("wholesale", {}).get("buyer_percent_arv", 0))
@@ -1444,6 +1601,9 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         why.append(f"Current price is inside the modeled range for {best_exit}.")
     why.append(f"ARV/value source is {arv_source_used} at {money(deal.arv)} with {arv_confidence} confidence.")
     why.append(f"Rent is {money(deal.rent)} and repairs are {money(deal.repairs)}.")
+    why.append(f"Rent source is {rent_state.get('rent_source', 'Missing / RentCast unavailable')} with {rent_state.get('rent_confidence', 'Weak')} confidence.")
+    if rent_state.get("rent_verification_needed") == "Yes":
+        why.append("RentCast could not verify rent. Slow Flip numbers are not reliable until rent comps are manually verified.")
     if weak_arv_source:
         why.append("ARV confidence is not strong enough for a clean Buy decision.")
     if best_exit == "Wholesale" and weak_arv_source:
@@ -1465,7 +1625,7 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
 
     if "Missing repairs" in missing_info:
         next_move = "Verify repairs first"
-    elif "Missing rent" in missing_info:
+    elif "Missing rent" in missing_info or "Verify rent comps manually" in missing_info:
         next_move = "Verify rent first"
     elif any("termite" in str(flag).lower() or "structural" in str(flag).lower() or "moisture" in str(flag).lower() for flag in risk_flags):
         next_move = "Get contractor/termite inspection"
@@ -1527,6 +1687,10 @@ def build_simple_deal_answer(result: dict, deal: DealInput, missing_info: list[s
         "deal_protection_status": st.session_state.get("deal_protection_mode", "Yes"),
         "buyer_message_allowed": st.session_state.get("buyer_message_allowed", "Teaser Only"),
         "protected_fields_hidden": st.session_state.get("protected_fields_hidden", []),
+        "rent_source": rent_state.get("rent_source", "Missing / RentCast unavailable"),
+        "rent_confidence": rent_state.get("rent_confidence", "Weak"),
+        "rent_verification_needed": rent_state.get("rent_verification_needed", "Yes"),
+        "slow_flip_rent_risk": rent_state.get("slow_flip_rent_risk", ""),
     }
 
 
@@ -1559,6 +1723,12 @@ def render_simple_deal_answer(simple_answer: dict) -> None:
         e2.metric("Wholesale Exit Confidence", simple_answer.get("wholesale_exit_confidence", "Weak"))
         e3.metric("Slow Flip Exit Confidence", simple_answer.get("slow_flip_exit_confidence", "Weak"))
         e4.metric("Overall Exit Confidence", simple_answer.get("overall_exit_confidence", "Weak"))
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Rent Source", simple_answer.get("rent_source", "Missing / RentCast unavailable"))
+        r2.metric("Rent Confidence", simple_answer.get("rent_confidence", "Weak"))
+        r3.metric("Rent Verification Needed?", simple_answer.get("rent_verification_needed", "Yes"))
+        if simple_answer.get("rent_verification_needed") == "Yes":
+            st.warning(simple_answer.get("slow_flip_rent_risk", "Verify rent comps manually."))
         if simple_answer.get("exit_risk_warnings"):
             st.write("Exit Risk Warnings:")
             for warning in simple_answer.get("exit_risk_warnings", []):
@@ -1884,6 +2054,7 @@ def build_deal_log_row(
     asking_price: float,
     contract_price: float,
 ) -> dict:
+    rent_state = apply_rent_fallback_state()
     best = result["best"]
     market_profile = get_market_profile(st.session_state.get("repair_market", "Central IL"))
     result_assumptions = result.get("assumptions", {})
@@ -1911,6 +2082,13 @@ def build_deal_log_row(
         "asking_price": asking_price,
         "contract_buy_price": contract_price,
         "rent": deal.rent,
+        "rent_source": rent_state.get("rent_source", "Missing / RentCast unavailable"),
+        "rent_confidence": rent_state.get("rent_confidence", "Weak"),
+        "rent_fallback_mode": rent_state.get("rent_fallback_mode", "Yes"),
+        "manual_rent_comp_count": rent_state.get("manual_rent_comp_count", 0),
+        "manual_rent_comp_average": rent_state.get("manual_rent_comp_average", 0),
+        "rent_verification_needed": rent_state.get("rent_verification_needed", "Yes"),
+        "slow_flip_rent_risk": rent_state.get("slow_flip_rent_risk", ""),
         "arv": deal.arv,
         "value_source": value_source,
         "arv_source_used": st.session_state.get("arv_source_used", value_source),
@@ -2165,12 +2343,16 @@ ui_context = SimpleNamespace(
     resolve_slow_flip_max_buy_price=resolve_slow_flip_max_buy_price,
     is_above_slow_flip_max_buy_price=is_above_slow_flip_max_buy_price,
     update_state_from_auto_pull=update_state_from_auto_pull,
+    apply_rent_fallback_state=apply_rent_fallback_state,
+    resolve_rent_fallback_state=resolve_rent_fallback_state,
+    manual_rent_comp_records=manual_rent_comp_records,
     apply_apify_zillow_import=apply_apify_zillow_import,
     repair_cushion_percent_value=repair_cushion_percent_value,
     render_repair_number_explanation=render_repair_number_explanation,
     build_repair_breakdown=build_repair_breakdown,
     render_repair_estimate_breakdown=render_repair_estimate_breakdown,
     render_final_decision_box=render_final_decision_box,
+    build_simple_deal_answer=build_simple_deal_answer,
     build_deal_log_row=build_deal_log_row,
     render_save_deal_analysis=render_save_deal_analysis,
     build_dispo_test_summary=build_dispo_test_summary,
@@ -2185,6 +2367,8 @@ ui_context = SimpleNamespace(
     slow_flip_first_offer_gap=slow_flip_first_offer_gap,
 )
 
+st.session_state["one_load_rendered_in_app"] = True
+render_one_load_deal_section(st, ui_context, "Auto")
 render_lead_intake_section(st, ui_context)
 
 st.caption("Works for Zillow, MLS, agent leads, and off-market sellers. Slow Flip uses rent/livability; ARV and repairs are reference unless you switch to Wholesale/Auto.")
@@ -2197,6 +2381,7 @@ exit_mode = st.radio(
 )
 
 render_deal_protection_section(st, ui_context)
+render_rent_fallback_section(st, ui_context)
 render_buyer_demand_section(st, EXIT_OBSTACLE_OPTIONS)
 render_buyer_outreach_section(st, BUYER_CONCERN_OPTIONS)
 uploaded_repair_files = render_repair_section(st, ui_context)

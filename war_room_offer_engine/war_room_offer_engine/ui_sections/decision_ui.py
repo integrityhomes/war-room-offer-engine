@@ -19,6 +19,7 @@ def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
     render_repair_estimate_breakdown = ui.render_repair_estimate_breakdown
     build_deal_log_row = ui.build_deal_log_row
     render_save_deal_analysis = ui.render_save_deal_analysis
+    apply_rent_fallback_state = ui.apply_rent_fallback_state
     percent_label = ui.percent_label
     safe_condition_text = ui.safe_condition_text
     min_assignment_fee = ui.min_assignment_fee
@@ -44,6 +45,9 @@ def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
 
         if resolved_arv <= 0:
             st.warning("ARV is missing. Add ARV or manual comps before making a final offer.")
+        rent_state = apply_rent_fallback_state()
+        if rent_state.get("rent_verification_needed") == "Yes":
+            st.warning(rent_state.get("slow_flip_rent_risk", "Verify rent comps manually."))
 
         slow_flip_lead_search_max = get_market_slow_flip_lead_search_max(st.session_state.get("repair_market", "Central IL"))
         slow_flip_max_buy_price, slow_flip_max_source = resolve_slow_flip_max_buy_price(st.session_state.get("repair_market", "Central IL"))
@@ -121,6 +125,9 @@ def render_decision_section(st, ui, exit_mode, uploaded_repair_files) -> None:
             notes=analysis_notes,
             arv=float(resolved_arv or 0),
             repairs=float(st.session_state.get("repairs", 0) or 0),
+            rent_source=rent_state.get("rent_source", "Missing / RentCast unavailable"),
+            rent_confidence=rent_state.get("rent_confidence", "Weak"),
+            rent_verification_needed=rent_state.get("rent_verification_needed", "Yes"),
         )
 
         result = analyze_deal(deal, assumptions)
