@@ -51,6 +51,40 @@ ONE_LOAD_DEFAULTS = {
     "occupancy": "Unknown",
 }
 
+ONE_LOAD_WIDGET_DEFAULTS = {
+    "one_load_lead_type": "On-market listing",
+    "one_load_lead_source": "Zillow",
+    "one_load_input_method": "Property address",
+    "one_load_property_address": "",
+    "one_load_listing_url": "",
+    "one_load_apify_dataset": "",
+    "one_load_asking_price": 0,
+    "one_load_seller_desired_price": 0,
+    "one_load_mortgage_balance": 0,
+    "one_load_contact_name": "",
+    "one_load_contact_phone": "",
+    "one_load_contact_email": "",
+    "one_load_pasted_listing_text": "",
+    "one_load_seller_notes": "",
+    "one_load_motivation_notes": "",
+    "one_load_timeline": "",
+    "one_load_repairs_mentioned": "",
+    "one_load_access_notes": "",
+    "one_load_occupancy": "Unknown",
+}
+
+
+def initialize_one_load_defaults(st) -> None:
+    legacy_key_map = {
+        "one_load_apify_dataset_id": "one_load_apify_dataset",
+        "one_load_listing_text": "one_load_pasted_listing_text",
+    }
+    for legacy_key, new_key in legacy_key_map.items():
+        if new_key not in st.session_state and st.session_state.get(legacy_key) not in [None, ""]:
+            st.session_state[new_key] = st.session_state.get(legacy_key)
+    for key, value in ONE_LOAD_WIDGET_DEFAULTS.items():
+        st.session_state.setdefault(key, value)
+
 
 def _state_has_manual_value(st, key: str) -> bool:
     value = st.session_state.get(key)
@@ -108,8 +142,8 @@ def _build_payload_from_state(st, csv_record: dict | None = None) -> dict:
         "input_method": st.session_state.get("one_load_input_method", ""),
         "property_address": st.session_state.get("one_load_property_address", ""),
         "listing_url": st.session_state.get("one_load_listing_url", ""),
-        "dataset_id": st.session_state.get("one_load_apify_dataset_id", ""),
-        "listing_text": st.session_state.get("one_load_listing_text", ""),
+        "dataset_id": st.session_state.get("one_load_apify_dataset", ""),
+        "listing_text": st.session_state.get("one_load_pasted_listing_text", ""),
         "seller_notes": st.session_state.get("one_load_seller_notes", ""),
         "asking_price": st.session_state.get("one_load_asking_price", 0),
         "seller_desired_price": st.session_state.get("one_load_seller_desired_price", 0),
@@ -393,8 +427,10 @@ def _render_one_load_summary(st, ui, normalized: dict) -> None:
 
 
 def render_one_load_deal_section(st, ui, exit_mode: str = "Auto") -> None:
+    initialize_one_load_defaults(st)
     st.header("One-Load Deal Analyzer")
     st.caption("One input can populate the deal engine for on-market, off-market, CSV, Apify, and manual leads.")
+    st.info("One-Load settings saved. Change source/input method as needed, then run analysis.")
     with st.expander("One-Load Deal Analyzer", expanded=True):
         top_cols = st.columns(3)
         with top_cols[0]:
@@ -421,12 +457,12 @@ def render_one_load_deal_section(st, ui, exit_mode: str = "Auto") -> None:
                 ["Property address", "Listing URL", "Apify dataset URL / ID", "Paste listing text", "Paste seller notes", "Upload CSV", "Manual quick entry"],
                 key="one_load_input_method",
             )
-            st.text_input("Apify dataset ID / URL", key="one_load_apify_dataset_id")
+            st.text_input("Apify dataset ID / URL", key="one_load_apify_dataset")
             st.number_input("Mortgage balance if known", min_value=0, step=1000, key="one_load_mortgage_balance")
             st.text_input("Contact email", key="one_load_contact_email")
         detail_cols = st.columns(2)
         with detail_cols[0]:
-            st.text_area("Pasted listing text", height=120, key="one_load_listing_text")
+            st.text_area("Pasted listing text", height=120, key="one_load_pasted_listing_text")
             st.text_area("Motivation notes", height=80, key="one_load_motivation_notes")
             st.text_input("Timeline", key="one_load_timeline")
         with detail_cols[1]:
