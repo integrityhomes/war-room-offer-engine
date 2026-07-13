@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 try:
+    import hide_floating_quick_tools  # noqa: F401 - keep sidebar navigation, remove right-side floating panel
+except ImportError:
+    try:
+        from . import hide_floating_quick_tools  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import hide_floating_quick_tools  # noqa: F401
+
+try:
     import one_load_sources as base
     import zillow_url_import_safe as zillow_safe
     from zillow_score_patch import safe_score_zillow_row
