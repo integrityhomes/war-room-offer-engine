@@ -58,6 +58,28 @@ calls.clear()
 result = repair_guard(FakeSt("🏷️ Rent"), object())
 check(result == [] and not calls, "unselected repair renderer returns a safe empty upload list")
 
+embedded_comps_calls: list[str] = []
+repair_only_calls: list[str] = []
+
+
+def render_comps_section(*args, **kwargs):
+    embedded_comps_calls.append("comps")
+
+
+def repair_renderer_with_embedded_comps(*args, **kwargs):
+    repair_only_calls.append("repairs")
+    render_comps_section(*args, **kwargs)
+    return ["upload"]
+
+
+separated_repair_guard = workspace._make_workspace_guard(
+    "render_repair_section",
+    repair_renderer_with_embedded_comps,
+)
+result = separated_repair_guard(FakeSt("🛠️ Repairs"), object())
+check(result == ["upload"] and repair_only_calls == ["repairs"], "Repairs workspace still runs the repair renderer")
+check(not embedded_comps_calls, "Repairs workspace does not also open Comps / ARV")
+
 check(
     workspace.RENDERER_WORKSPACES["render_decision_section"] == "✅ QA / Decision",
     "Decision renderer is isolated to the QA workspace",
@@ -72,6 +94,7 @@ loader_text = (APP_DIR / "one_load_sources_safe.py").read_text(encoding="utf-8")
 check("position: fixed" not in source_text, "new navigation does not create a right-side floating panel")
 check("_inside_old_quick_tools" in source_text, "older floating and duplicate navigation is suppressed")
 check("Only that section stays open" in source_text, "sidebar explains single-section behavior")
+check("_render_repairs_without_comps" in source_text, "repair and comps workspaces are separated")
 check("import workspace_mode" in loader_text, "workspace mode loads during app startup")
 
 print("Sidebar single-section workspace smoke test passed.")
