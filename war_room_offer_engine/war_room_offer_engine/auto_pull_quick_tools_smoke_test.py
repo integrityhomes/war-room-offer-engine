@@ -91,6 +91,31 @@ check(
     module._is_widget_state_order_error(FakeStreamlitAPIException("cannot be modified after the widget with key")),
     "Streamlit widget state-order error is recognized",
 )
+
+
+def render_lead_intake_section(st_arg, ui_arg):
+    return "rendered"
+
+
+module._install_lead_intake_guard_from_caller(fake_st)
+guarded_render = globals()["render_lead_intake_section"]
+check(
+    getattr(guarded_render, "_war_room_state_order_guard", False),
+    "Property Data renderer is wrapped before widgets are created",
+)
+
+safe_ui = SimpleNamespace(update_state_from_auto_pull=lambda data: applied.append(dict(data)))
+result = guarded_render(fake_st, safe_ui)
+check(result == "rendered", "guarded Property Data renderer still calls the original renderer")
+check(
+    bool(applied) and applied[-1].get("asking_price") == 65000,
+    "queued property data is applied before Property Data widgets render",
+)
+check(
+    getattr(safe_ui, "_war_room_safe_auto_pull_installed", False),
+    "Property Data receives the safe auto-pull wrapper",
+)
+
 check(
     any(label == "Repairs" and anchor == "3-repair-condition-analyzer" for _, label, anchor in module._QUICK_TOOLS),
     "Quick Tools includes a direct Repairs jump",
