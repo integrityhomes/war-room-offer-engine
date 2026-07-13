@@ -44,6 +44,22 @@ def _money(value: Any) -> float:
         return 0.0
 
 
+def _fail_or_return(result: dict[str, Any]) -> dict[str, Any]:
+    """Stop the Streamlit run cleanly instead of analyzing blank/default data."""
+    try:
+        import streamlit as st
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+    except Exception:
+        return result
+
+    if get_script_run_ctx() is not None:
+        message = str(result.get("error") or "Zillow data could not be imported.")
+        st.error("Zillow import stopped: " + message)
+        st.info("No offer was calculated because the subject property data was not verified.")
+        st.stop()
+    return result
+
+
 def _address_hint_from_url(listing_url: str) -> str:
     try:
         path = urlsplit(str(listing_url or "")).path
@@ -185,11 +201,50 @@ def _enrich_from_raw(data: dict[str, Any], raw_record: dict[str, Any]) -> dict[s
     return enriched
 
 
+def _score_zillow_row(row: dict[str, Any], listing_url: str, address: str = "") -> int:
+    data = row.get("data", row) if isinstance(row, dict) else {}
+    if not isinstance(data, dict):
+        return -100
+
+    score = 0
+    target_zpid = base.extract_zpid(listing_url)
+    row_zpid = str(data.get("zpid") or base.extract_zpid(str(data.get("listing_url") or "")))
+    if target_zpid and row_zpid and target_zpid == row_zpid:
+        score += 100
+
+    target_url = base.canonical_url(listing_url)
+    row_url = base.canonical_url(str(data.get("listing_url") or data.get("zillow_link") or ""))
+    if target_url and row_url:
+        if target_url == row_url:
+            score += 80
+        elif target_url in row_url or row_url in target_url:
+            score += 50
+
+    target_address = base.normalize_address(address)
+    row_address = base.normalize_address(str(data.get("address") or ""))
+    if target_address and row_address:
+        if target_address == row_address:
+            score += 70
+        elif target_address in row_address or row_address in target_address:
+            score += 35
+
+    target_zip = base.extract_zip(address, listing_url)
+    row_zip = str(data.get("zip") or "")
+    if target_zip and row_zip and target_zip == row_zip:
+        score += 10
+
+    if row.get("ok", True):
+        score += 5
+    if _money(data.get("asking_price")) > 0:
+        score += 5
+    return score
+
+
 def _strict_match(rows: list[dict[str, Any]], listing_url: str, address: str = "") -> dict[str, Any] | None:
     if not rows:
         return None
     address_hint = address or _address_hint_from_url(listing_url)
-    ranked = sorted(rows, key=lambda row: base.score_zillow_row(row, listing_url, address_hint), reverse=True)
+    ranked = sorted(rows, key=lambda row: _score_zillow_row(row, listing_url, address_hint), reverse=True)
     best = ranked[0]
     data = best.get("data", best) if isinstance(best, dict) else {}
 
@@ -215,25 +270,29 @@ def _strict_match(rows: list[dict[str, Any]], listing_url: str, address: str = "
 def pull_zillow_listing(listing_url: str, address: str = "", limit: int = 10) -> dict[str, Any]:
     url = str(listing_url or "").strip()
     if not base.is_zillow_url(url):
-        return {
-            "ok": False,
-            "source": "Apify Zillow Live Pull",
-            "error": "Paste a complete Zillow property URL beginning with https://.",
-        }
+        return _fail_or_return(
+            {
+                "ok": False,
+                "source": "Apify Zillow Live Pull",
+                "error": "Paste a complete Zillow property URL beginning with https://.",
+            }
+        )
 
     result = base._configured_result(url, address, max(int(limit or 10), 1))
     if not result.get("ok"):
-        return result
+        return _fail_or_return(result)
 
     rows = result.get("rows", []) or []
     selected = _strict_match(rows, url, address)
     if selected is None:
-        return {
-            "ok": False,
-            "source": result.get("source", "Apify Zillow Live Pull"),
-            "error": "The Zillow scraper returned properties, but none safely matched the pasted Zillow URL or address.",
-            "row_count": len(rows),
-        }
+        return _fail_or_return(
+            {
+                "ok": False,
+                "source": result.get("source", "Apify Zillow Live Pull"),
+                "error": "The Zillow scraper returned properties, but none safely matched the pasted Zillow URL or address.",
+                "row_count": len(rows),
+            }
+        )
 
     data = dict(selected.get("data", {}) or {})
     raw_items = result.get("raw_items", []) or []
@@ -247,6 +306,18 @@ def pull_zillow_listing(listing_url: str, address: str = "", limit: int = 10) ->
     warnings = list(selected.get("warnings", []) or [])
     if missing:
         warnings.append("Missing from Zillow pull: " + ", ".join(missing))
+
+    blocking_missing = [field for field in ["address", "asking_price"] if field in missing]
+    if blocking_missing:
+        return _fail_or_return(
+            {
+                "ok": False,
+                "source": result.get("source", "Apify Zillow Live Pull"),
+                "error": "The subject property matched, but required fields were missing: " + ", ".join(blocking_missing) + ".",
+                "row_count": len(rows),
+                "warnings": warnings,
+            }
+        )
 
     return {
         "ok": True,
