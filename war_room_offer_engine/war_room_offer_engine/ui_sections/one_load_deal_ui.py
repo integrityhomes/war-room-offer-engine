@@ -11,6 +11,14 @@ except ImportError:
         from war_room_offer_engine.data_sources import fetch_universal_apify_dataset
         from war_room_offer_engine.one_load_sources import normalize_one_load_lead
 
+try:
+    from ui_sections.realtor_outreach_ui import render_realtor_outreach_panel
+except ImportError:
+    try:
+        from .realtor_outreach_ui import render_realtor_outreach_panel
+    except ImportError:
+        from war_room_offer_engine.ui_sections.realtor_outreach_ui import render_realtor_outreach_panel
+
 
 ONE_LOAD_FIELD_MAP = {
     "address": "address",
@@ -658,4 +666,5 @@ def render_one_load_deal_section(st, ui, exit_mode: str = "Auto") -> None:
                 st.success(st.session_state["one_load_import_status"])
                 st.rerun()
             _render_off_market_summary(st, normalized)
+            render_realtor_outreach_panel(st, normalized)
             _render_one_load_summary(st, ui, normalized)
