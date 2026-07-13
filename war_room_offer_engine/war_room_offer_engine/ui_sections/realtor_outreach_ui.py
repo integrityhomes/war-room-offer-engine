@@ -132,12 +132,7 @@ def _is_widget_state_order_error(exc: Exception) -> bool:
 
 
 def _install_safe_auto_pull_state_order(st) -> None:
-    """Recover auto-pulled values through a rerun when widgets already exist.
-
-    The Property Data section can receive listing URL, agent, rent, and pricing data
-    after its widgets have been instantiated. Streamlit blocks those late writes.
-    We queue the merged record, rerun, and apply it before that section is drawn.
-    """
+    """Recover auto-pulled values through a rerun when widgets already exist."""
     ui = _find_ui_context()
     if ui is None:
         return
@@ -173,7 +168,22 @@ def _install_safe_auto_pull_state_order(st) -> None:
     ui._war_room_safe_auto_pull_installed = True
 
 
+def _quick_tools_run_token() -> str:
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        ctx = get_script_run_ctx()
+        return str(id(ctx)) if ctx is not None else "no-context"
+    except Exception:
+        return "no-context"
+
+
 def _render_quick_tools(st) -> None:
+    run_token = _quick_tools_run_token()
+    if getattr(st, "_war_room_quick_tools_run_token", None) == run_token:
+        return
+    st._war_room_quick_tools_run_token = run_token
+
     links = "".join(
         f'<a class="wr-tool-link" href="#{anchor}" target="_self"><span>{icon}</span>{label}</a>'
         for icon, label, anchor in _QUICK_TOOLS
@@ -234,6 +244,30 @@ def _render_quick_tools(st) -> None:
         st.caption("Jump directly to a section.")
         for icon, label, anchor in _QUICK_TOOLS:
             st.markdown(f"[{icon} **{label}**](#{anchor})")
+
+
+def _install_global_quick_tools_hook() -> None:
+    """Render navigation after the app title on every Streamlit rerun."""
+    try:
+        import streamlit as st
+    except Exception:
+        return
+
+    if getattr(st, "_war_room_quick_tools_title_hook", False):
+        return
+
+    original_title = st.title
+
+    def title_with_quick_tools(*args, **kwargs):
+        result = original_title(*args, **kwargs)
+        _render_quick_tools(st)
+        return result
+
+    st.title = title_with_quick_tools
+    st._war_room_quick_tools_title_hook = True
+
+
+_install_global_quick_tools_hook()
 
 
 def _as_list(value: Any) -> list[str]:
