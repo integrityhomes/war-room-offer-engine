@@ -35,15 +35,73 @@ def _first_nonblank(record: dict[str, Any], *keys: str) -> Any:
 
 
 def _money(value: Any) -> float:
-    if value in [None, "", [], {}]:
+    """Convert Zillow/Apify number shapes without ever raising.
+
+    Real actor responses may contain numbers, formatted strings such as
+    ``$64,900``, one-item lists, or nested objects such as
+    ``{"value": 64900}``.  Scoring and importing must handle all of them.
+    """
+    if value in [None, "", [], {}] or isinstance(value, bool):
         return 0.0
     if isinstance(value, (int, float)):
         return float(value)
-    cleaned = re.sub(r"[^0-9.\-]", "", str(value))
-    try:
-        return float(cleaned) if cleaned else 0.0
-    except Exception:
+    if isinstance(value, dict):
+        preferred_keys = [
+            "value",
+            "price",
+            "amount",
+            "unformattedPrice",
+            "listPrice",
+            "listingPrice",
+            "askingPrice",
+            "formattedValue",
+            "formatted",
+            "text",
+        ]
+        for key in preferred_keys:
+            if key in value:
+                number = _money(value.get(key))
+                if number > 0:
+                    return number
+        for nested in value.values():
+            number = _money(nested)
+            if number > 0:
+                return number
         return 0.0
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            number = _money(item)
+            if number > 0:
+                return number
+        return 0.0
+
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    match = re.search(r"-?\d[\d,]*(?:\.\d+)?", text)
+    if not match:
+        return 0.0
+    cleaned = match.group(0).replace(",", "")
+    try:
+        return float(cleaned)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _stop_or_return(result: dict[str, Any]) -> dict[str, Any]:
+    """Stop a Streamlit run cleanly; return normally in offline tests."""
+    try:
+        import streamlit as st
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+    except Exception:
+        return result
+
+    if get_script_run_ctx() is not None:
+        message = str(result.get("error") or "Zillow data could not be imported.")
+        st.error("Zillow import stopped: " + message)
+        st.info("No offer was calculated because the subject property data was not verified.")
+        st.stop()
+    return result
 
 
 def _address_hint_from_url(listing_url: str) -> str:
@@ -153,13 +211,14 @@ def _enrich_from_raw(data: dict[str, Any], raw_record: dict[str, Any]) -> dict[s
         "asking_price", "beds", "baths", "sqft", "lot_size", "year_built",
         "days_on_market", "rent", "arv", "taxes", "tax_assessed_value", "last_sale_price",
     }
+
     for target, keys in aliases.items():
-        if enriched.get(target) not in [None, "", 0, 0.0, [], {}]:
+        current = enriched.get(target)
+        if current in [None, "", 0, 0.0, [], {}]:
+            current = _first_nonblank(raw_record, *keys)
+        if current in [None, "", 0, 0.0, [], {}]:
             continue
-        value = _first_nonblank(raw_record, *keys)
-        if value in [None, "", 0, 0.0, [], {}]:
-            continue
-        enriched[target] = _money(value) if target in numeric else value
+        enriched[target] = _money(current) if target in numeric else current
 
     photos = extract_photo_urls(raw_record or enriched)
     if photos:
@@ -168,11 +227,50 @@ def _enrich_from_raw(data: dict[str, Any], raw_record: dict[str, Any]) -> dict[s
     return enriched
 
 
+def _score_zillow_row(row: dict[str, Any], listing_url: str, address: str = "") -> int:
+    data = row.get("data", row) if isinstance(row, dict) else {}
+    if not isinstance(data, dict):
+        return -100
+
+    score = 0
+    target_zpid = base.extract_zpid(listing_url)
+    row_zpid = str(data.get("zpid") or base.extract_zpid(str(data.get("listing_url") or "")))
+    if target_zpid and row_zpid and target_zpid == row_zpid:
+        score += 100
+
+    target_url = base.canonical_url(listing_url)
+    row_url = base.canonical_url(str(data.get("listing_url") or data.get("zillow_link") or ""))
+    if target_url and row_url:
+        if target_url == row_url:
+            score += 80
+        elif target_url in row_url or row_url in target_url:
+            score += 50
+
+    target_address = base.normalize_address(address)
+    row_address = base.normalize_address(str(data.get("address") or ""))
+    if target_address and row_address:
+        if target_address == row_address:
+            score += 70
+        elif target_address in row_address or row_address in target_address:
+            score += 35
+
+    target_zip = base.extract_zip(address, listing_url)
+    row_zip = str(data.get("zip") or "")
+    if target_zip and row_zip and target_zip == row_zip:
+        score += 10
+
+    if row.get("ok", True):
+        score += 5
+    if _money(data.get("asking_price")) > 0:
+        score += 5
+    return score
+
+
 def _strict_match(rows: list[dict[str, Any]], listing_url: str, address: str = "") -> dict[str, Any] | None:
     if not rows:
         return None
     address_hint = address or _address_hint_from_url(listing_url)
-    ranked = sorted(rows, key=lambda row: base.score_zillow_row(row, listing_url, address_hint), reverse=True)
+    ranked = sorted(rows, key=lambda row: _score_zillow_row(row, listing_url, address_hint), reverse=True)
     best = ranked[0]
     data = best.get("data", best) if isinstance(best, dict) else {}
 
@@ -277,7 +375,13 @@ def _sheet_fallback(listing_url: str) -> dict[str, Any]:
 def pull_zillow_listing(listing_url: str, address: str = "", limit: int = 10) -> dict[str, Any]:
     url = str(listing_url or "").strip()
     if not base.is_zillow_url(url):
-        raise RuntimeError("Paste a complete Zillow property URL beginning with https://.")
+        return _stop_or_return(
+            {
+                "ok": False,
+                "source": "Apify Zillow Live Pull",
+                "error": "Paste a complete Zillow property URL beginning with https://.",
+            }
+        )
 
     live_result = base._configured_result(url, address, max(int(limit or 10), 1))
     if live_result.get("ok"):
@@ -295,6 +399,16 @@ def pull_zillow_listing(listing_url: str, address: str = "", limit: int = 10) ->
             warnings = list(selected.get("warnings", []) or [])
             if missing:
                 warnings.append("Missing from Zillow pull: " + ", ".join(missing))
+            blocking_missing = [field for field in ["address", "asking_price"] if field in missing]
+            if blocking_missing:
+                return _stop_or_return(
+                    {
+                        "ok": False,
+                        "source": live_result.get("source", "Apify Zillow Live Pull"),
+                        "error": "The property matched, but required fields were missing: " + ", ".join(blocking_missing) + ".",
+                        "warnings": warnings,
+                    }
+                )
             return {
                 "ok": True,
                 "source": live_result.get("source", "Apify Zillow Live Pull"),
@@ -315,7 +429,13 @@ def pull_zillow_listing(listing_url: str, address: str = "", limit: int = 10) ->
 
     live_error = str(live_result.get("error") or "Live Apify pull did not return a safe property match.")
     sheet_error = str(sheet_result.get("error") or "No sheet fallback match was found.")
-    raise RuntimeError(
-        "Zillow import failed, so analysis was stopped before using default values. "
-        f"Live pull: {live_error} Sheet fallback: {sheet_error}"
+    return _stop_or_return(
+        {
+            "ok": False,
+            "source": "Zillow import",
+            "error": (
+                "Zillow import failed, so analysis was stopped before using default values. "
+                f"Live pull: {live_error} Sheet fallback: {sheet_error}"
+            ),
+        }
     )
