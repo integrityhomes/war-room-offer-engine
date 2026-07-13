@@ -105,6 +105,20 @@ def _render_comps_only(st, ui) -> list[Any]:
     return []
 
 
+def _render_repairs_without_comps(original: Callable[..., Any], *args, **kwargs):
+    """Run the repair workspace without its embedded sold-comps section."""
+    namespace = getattr(original, "__globals__", {})
+    embedded_comps = namespace.get("render_comps_section") if isinstance(namespace, dict) else None
+    if not callable(embedded_comps):
+        return original(*args, **kwargs)
+
+    namespace["render_comps_section"] = lambda *unused_args, **unused_kwargs: None
+    try:
+        return original(*args, **kwargs)
+    finally:
+        namespace["render_comps_section"] = embedded_comps
+
+
 def _make_workspace_guard(name: str, original: Callable[..., Any]):
     expected_workspace = RENDERER_WORKSPACES[name]
 
@@ -120,7 +134,7 @@ def _make_workspace_guard(name: str, original: Callable[..., Any]):
                 return _render_comps_only(st_arg, ui_arg)
             if current != expected_workspace:
                 return []
-            return original(*args, **kwargs)
+            return _render_repairs_without_comps(original, *args, **kwargs)
 
         if current != expected_workspace:
             return None
