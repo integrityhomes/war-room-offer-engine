@@ -36,29 +36,45 @@ module = import_first(
 )
 
 zillow_url = "https://www.zillow.com/homedetails/1388-N-Walnut-Grove-Ave-Decatur-IL-62526/12345678_zpid/"
+address = "1388 N Walnut Grove Ave, Decatur IL 62526"
 
 check(module.is_zillow_url(zillow_url), "Zillow property URL is recognized")
 check(module.extract_zpid(zillow_url) == "12345678", "ZPID is extracted")
+check(module.extract_zip_code(zillow_url, address) == "62526", "ZIP is extracted from Zillow URL/address")
 
 actor_input = module.build_zillow_actor_input(
     zillow_url,
-    address="1388 N Walnut Grove Ave, Decatur IL 62526",
+    address=address,
     limit=10,
+    input_mode="zipcodes",
 )
-check(actor_input == {"startUrls": [{"url": zillow_url}]}, "default actor input uses startUrls")
+check(actor_input == {"zipCodes": ["62526"]}, "ZIP-search actor input uses the property ZIP")
 
-base_input = {"startUrls": [{"url": "https://www.zillow.com/old"}], "maxItems": 100}
-merged_input = module.build_zillow_actor_input(zillow_url, limit=5, base_input=base_input)
-check(merged_input["startUrls"] == [{"url": zillow_url}], "saved task URL is replaced")
-check(merged_input["maxItems"] == 5, "saved task result limit is replaced")
+saved_zip_input = {"zipCodes": ["61602", "61603"], "maxItems": 500}
+merged_zip_input = module.build_zillow_actor_input(
+    zillow_url,
+    address=address,
+    limit=25,
+    base_input=saved_zip_input,
+)
+check(merged_zip_input["zipCodes"] == ["62526"], "saved task ZIP list is replaced with the subject ZIP")
+check(merged_zip_input["maxItems"] == 25, "saved task result limit is reduced for one-property lookup")
+
+url_actor_input = module.build_zillow_actor_input(
+    zillow_url,
+    address=address,
+    limit=5,
+    input_mode="starturls",
+)
+check(url_actor_input == {"startUrls": [{"url": zillow_url}]}, "URL actor mode remains supported")
 
 template_input = module.build_zillow_actor_input(
     zillow_url,
-    address="1388 N Walnut Grove Ave, Decatur IL 62526",
+    address=address,
     limit=3,
-    template_text='{"urls":["{{LISTING_URL}}"],"maxResults":{{LIMIT}}}',
+    template_text='{"zipCodes":["{{ZIP_CODE}}"],"maxResults":{{LIMIT}}}',
 )
-check(template_input["urls"] == [zillow_url], "JSON template receives Zillow URL")
+check(template_input["zipCodes"] == ["62526"], "JSON template receives the property ZIP")
 check(template_input["maxResults"] == 3, "JSON template receives result limit")
 
 rows = [
@@ -74,15 +90,18 @@ rows = [
     {
         "ok": True,
         "data": {
-            "address": "1388 N Walnut Grove Ave, Decatur IL 62526",
+            "address": address,
             "zpid": "12345678",
             "listing_url": zillow_url,
             "asking_price": 64900,
         },
     },
 ]
-selected = module.select_matching_zillow_row(rows, zillow_url, "1388 N Walnut Grove Ave, Decatur IL 62526")
-check(selected is rows[1], "exact Zillow property row is selected")
+selected = module.select_matching_zillow_row(rows, zillow_url, address)
+check(selected is rows[1], "exact Zillow property row is selected from ZIP results")
+
+no_match = module.select_matching_zillow_row(rows, "https://www.zillow.com/homedetails/No-Match/55555555_zpid/", "1 Missing Ave, Decatur IL 62526")
+check(no_match is None, "unmatched ZIP-search rows are rejected instead of importing the wrong house")
 
 photos = module.extract_photo_urls(
     {
