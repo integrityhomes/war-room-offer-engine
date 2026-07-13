@@ -66,7 +66,7 @@ rows = [
             "address": "999 Other St, Decatur IL 62526",
             "zpid": "99999999",
             "listing_url": "https://www.zillow.com/homedetails/999-Other-St/99999999_zpid/",
-            "asking_price": 50000,
+            "asking_price": "$50,000",
         },
     },
     {
@@ -75,12 +75,16 @@ rows = [
             "address": address,
             "zpid": "12345678",
             "listing_url": zillow_url,
-            "asking_price": 64900,
+            "asking_price": {"value": "$64,900"},
         },
     },
 ]
 selected = module._strict_match(rows, zillow_url, address)
 check(selected is rows[1], "exact Zillow property row is selected from ZIP results")
+check(module._score_zillow_row(rows[1], zillow_url, address) > 0, "nested formatted price does not crash scoring")
+check(module._money("$64,900") == 64900, "formatted dollar price is cleaned")
+check(module._money({"value": "$64,900"}) == 64900, "nested price object is cleaned")
+check(module._money([{"amount": "64,900"}]) == 64900, "list-wrapped price is cleaned")
 
 no_match = module._strict_match(
     rows,
@@ -94,10 +98,11 @@ raw_record = {
     "agent_emai": "stacy@example.com",
     "agent_phone": "2175551212",
     "agent_brokerage": "Test Realty",
-    "RC_Rent_Clean": 1100,
+    "RC_Rent_Clean": "$1,100",
     "photo_all": "https://photos.zillowstatic.com/front.jpg\nhttps://photos.zillowstatic.com/kitchen.jpg",
 }
-enriched = module._enrich_from_raw({}, raw_record)
+enriched = module._enrich_from_raw({"asking_price": {"value": "$64,900"}}, raw_record)
+check(enriched["asking_price"] == 64900, "existing nested asking price is normalized before analysis")
 check(enriched["listing_agent_name"] == "Stacy Spracklen", "agent name auto-populates")
 check(enriched["listing_agent_email"] == "stacy@example.com", "agent_emai typo auto-populates")
 check(enriched["listing_agent_phone"] == "2175551212", "agent phone auto-populates")
@@ -106,7 +111,7 @@ check(enriched["rent"] == 1100, "RC_Rent_Clean auto-populates")
 check(len(enriched["listing_photos"]) == 2, "all newline-separated Zillow photos auto-populate")
 
 bad_url = module.pull_zillow_listing("not-a-zillow-url")
-check(not bad_url["ok"], "invalid URL fails safely")
+check(not bad_url["ok"], "invalid URL fails safely outside Streamlit")
 check("complete Zillow property URL" in bad_url["error"], "invalid URL gives a useful message")
 
 print("Zillow URL import smoke test passed.")
