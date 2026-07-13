@@ -109,7 +109,6 @@ _install_one_load_widget_autofill()
 
 
 def _find_ui_context():
-    """Locate the One-Load caller's ui context without coupling this panel to app.py."""
     frame = inspect.currentframe()
     try:
         while frame is not None:
@@ -131,10 +130,9 @@ def _is_widget_state_order_error(exc: Exception) -> bool:
     )
 
 
-def _install_safe_auto_pull_state_order(st) -> None:
-    """Recover auto-pulled values through a rerun when widgets already exist."""
-    ui = _find_ui_context()
-    if ui is None:
+def _patch_ui_auto_pull(st, ui) -> None:
+    """Apply queued values before widgets and guard any later auto-pull write."""
+    if ui is None or not callable(getattr(ui, "update_state_from_auto_pull", None)):
         return
 
     original = getattr(ui, "_war_room_original_auto_pull_update", None)
@@ -166,6 +164,36 @@ def _install_safe_auto_pull_state_order(st) -> None:
 
     ui.update_state_from_auto_pull = safe_update
     ui._war_room_safe_auto_pull_installed = True
+
+
+def _install_safe_auto_pull_state_order(st) -> None:
+    _patch_ui_auto_pull(st, _find_ui_context())
+
+
+def _install_lead_intake_guard_from_caller(st) -> None:
+    """Wrap the app's Property Data renderer before it creates any widgets."""
+    frame = inspect.currentframe()
+    try:
+        while frame is not None:
+            namespace = frame.f_globals
+            render = namespace.get("render_lead_intake_section")
+            if callable(render):
+                if getattr(render, "_war_room_state_order_guard", False):
+                    return
+
+                original_render = render
+
+                def guarded_render(st_arg, ui_arg, *args, **kwargs):
+                    _patch_ui_auto_pull(st_arg, ui_arg)
+                    return original_render(st_arg, ui_arg, *args, **kwargs)
+
+                guarded_render._war_room_state_order_guard = True
+                guarded_render._war_room_original_render = original_render
+                namespace["render_lead_intake_section"] = guarded_render
+                return
+            frame = frame.f_back
+    finally:
+        del frame
 
 
 def _quick_tools_run_token() -> str:
@@ -247,7 +275,6 @@ def _render_quick_tools(st) -> None:
 
 
 def _install_global_quick_tools_hook() -> None:
-    """Render navigation after the app title on every Streamlit rerun."""
     try:
         import streamlit as st
     except Exception:
@@ -260,6 +287,7 @@ def _install_global_quick_tools_hook() -> None:
 
     def title_with_quick_tools(*args, **kwargs):
         result = original_title(*args, **kwargs)
+        _install_lead_intake_guard_from_caller(st)
         _render_quick_tools(st)
         return result
 
