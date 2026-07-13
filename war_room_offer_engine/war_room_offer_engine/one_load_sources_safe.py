@@ -1,26 +1,25 @@
 from __future__ import annotations
 
 try:
-    import zillow_score_patch  # noqa: F401 - installs formatted-price-safe Zillow scoring
-except ImportError:
-    try:
-        from . import zillow_score_patch  # noqa: F401
-    except ImportError:
-        from war_room_offer_engine import zillow_score_patch  # noqa: F401
-
-try:
     import one_load_sources as base
-    from zillow_url_import_safe import pull_zillow_listing
+    import zillow_url_import_safe as zillow_safe
+    from zillow_score_patch import safe_score_zillow_row
 except ImportError:
     try:
         from . import one_load_sources as base
-        from .zillow_url_import_safe import pull_zillow_listing
+        from . import zillow_url_import_safe as zillow_safe
+        from .zillow_score_patch import safe_score_zillow_row
     except ImportError:
         from war_room_offer_engine import one_load_sources as base
-        from war_room_offer_engine.zillow_url_import_safe import pull_zillow_listing
+        from war_room_offer_engine import zillow_url_import_safe as zillow_safe
+        from war_room_offer_engine.zillow_score_patch import safe_score_zillow_row
 
 
-base.pull_zillow_listing = pull_zillow_listing
+# Streamlit can load the same source module through different import paths.
+# Bind the safe scorer to the exact module object used by the active importer,
+# so formatted Zillow prices such as "$64,900" never reach float() directly.
+zillow_safe.base.score_zillow_row = safe_score_zillow_row
+base.pull_zillow_listing = zillow_safe.pull_zillow_listing
 
 
 def normalize_one_load_lead(payload):
