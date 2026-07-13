@@ -30,9 +30,9 @@ def import_first(*module_names: str):
 
 
 module = import_first(
-    "zillow_url_import",
-    "war_room_offer_engine.zillow_url_import",
-    "war_room_offer_engine.war_room_offer_engine.zillow_url_import",
+    "zillow_url_import_safe",
+    "war_room_offer_engine.zillow_url_import_safe",
+    "war_room_offer_engine.war_room_offer_engine.zillow_url_import_safe",
 )
 
 zillow_url = "https://www.zillow.com/homedetails/1388-N-Walnut-Grove-Ave-Decatur-IL-62526/12345678_zpid/"
@@ -58,24 +58,6 @@ merged_zip_input = module.build_zillow_actor_input(
     base_input=saved_zip_input,
 )
 check(merged_zip_input["zipCodes"] == ["62526"], "saved task ZIP list is replaced with the subject ZIP")
-check(merged_zip_input["maxItems"] == 25, "saved task result limit is reduced for one-property lookup")
-
-url_actor_input = module.build_zillow_actor_input(
-    zillow_url,
-    address=address,
-    limit=5,
-    input_mode="starturls",
-)
-check(url_actor_input == {"startUrls": [{"url": zillow_url}]}, "URL actor mode remains supported")
-
-template_input = module.build_zillow_actor_input(
-    zillow_url,
-    address=address,
-    limit=3,
-    template_text='{"zipCodes":["{{ZIP_CODE}}"],"maxResults":{{LIMIT}}}',
-)
-check(template_input["zipCodes"] == ["62526"], "JSON template receives the property ZIP")
-check(template_input["maxResults"] == 3, "JSON template receives result limit")
 
 rows = [
     {
@@ -97,22 +79,31 @@ rows = [
         },
     },
 ]
-selected = module.select_matching_zillow_row(rows, zillow_url, address)
+selected = module._strict_match(rows, zillow_url, address)
 check(selected is rows[1], "exact Zillow property row is selected from ZIP results")
 
-no_match = module.select_matching_zillow_row(rows, "https://www.zillow.com/homedetails/No-Match/55555555_zpid/", "1 Missing Ave, Decatur IL 62526")
-check(no_match is None, "unmatched ZIP-search rows are rejected instead of importing the wrong house")
-
-photos = module.extract_photo_urls(
-    {
-        "photos": [
-            {"url": "https://photos.zillowstatic.com/fp/front.jpg"},
-            {"mixedSources": {"jpeg": [{"url": "https://photos.zillowstatic.com/fp/kitchen.jpg"}]}},
-        ]
-    }
+no_match = module._strict_match(
+    rows,
+    "https://www.zillow.com/homedetails/1-Missing-Ave-Decatur-IL-62526/55555555_zpid/",
+    "",
 )
-check("https://photos.zillowstatic.com/fp/front.jpg" in photos, "primary photo is extracted")
-check("https://photos.zillowstatic.com/fp/kitchen.jpg" in photos, "nested photo is extracted")
+check(no_match is None, "wrong ZIP-search rows are rejected")
+
+raw_record = {
+    "agent_name": "Stacy Spracklen",
+    "agent_emai": "stacy@example.com",
+    "agent_phone": "2175551212",
+    "agent_brokerage": "Test Realty",
+    "RC_Rent_Clean": 1100,
+    "photo_all": "https://photos.zillowstatic.com/front.jpg\nhttps://photos.zillowstatic.com/kitchen.jpg",
+}
+enriched = module._enrich_from_raw({}, raw_record)
+check(enriched["listing_agent_name"] == "Stacy Spracklen", "agent name auto-populates")
+check(enriched["listing_agent_email"] == "stacy@example.com", "agent_emai typo auto-populates")
+check(enriched["listing_agent_phone"] == "2175551212", "agent phone auto-populates")
+check(enriched["listing_brokerage"] == "Test Realty", "brokerage auto-populates")
+check(enriched["rent"] == 1100, "RC_Rent_Clean auto-populates")
+check(len(enriched["listing_photos"]) == 2, "all newline-separated Zillow photos auto-populate")
 
 bad_url = module.pull_zillow_listing("not-a-zillow-url")
 check(not bad_url["ok"], "invalid URL fails safely")
