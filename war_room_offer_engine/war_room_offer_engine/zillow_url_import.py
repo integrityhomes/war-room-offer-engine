@@ -9,18 +9,38 @@ from urllib.parse import quote, urlsplit, urlunsplit
 import requests
 
 try:
-    from apify_connector import APIFY_API_BASE, fetch_dataset_items, normalize_address, normalize_zillow_records, run_actor_for_items
+    from apify_connector import (
+        APIFY_API_BASE,
+        fetch_dataset_items,
+        normalize_address,
+        normalize_zillow_records,
+        run_actor_for_items,
+    )
 except ImportError:
     try:
-        from .apify_connector import APIFY_API_BASE, fetch_dataset_items, normalize_address, normalize_zillow_records, run_actor_for_items
+        from .apify_connector import (
+            APIFY_API_BASE,
+            fetch_dataset_items,
+            normalize_address,
+            normalize_zillow_records,
+            run_actor_for_items,
+        )
     except ImportError:
-        from war_room_offer_engine.apify_connector import APIFY_API_BASE, fetch_dataset_items, normalize_address, normalize_zillow_records, run_actor_for_items
+        from war_room_offer_engine.apify_connector import (
+            APIFY_API_BASE,
+            fetch_dataset_items,
+            normalize_address,
+            normalize_zillow_records,
+            run_actor_for_items,
+        )
+
+
+DEFAULT_ZIP_SEARCH_ACTOR = "maxcopell~zillow-zip-search"
 
 
 def get_secret(name: str, default: str = "") -> str:
     try:
         import streamlit as st
-
         value = st.secrets.get(name, default)
         return str(value).strip() if value is not None else default
     except Exception:
@@ -29,7 +49,9 @@ def get_secret(name: str, default: str = "") -> str:
 
 def is_zillow_url(value: str) -> bool:
     text = str(value or "").strip().lower()
-    return text.startswith(("http://", "https://")) and ("zillow.com/" in text or "zillowstatic.com/" in text)
+    return text.startswith(("http://", "https://")) and (
+        "zillow.com/" in text or "zillowstatic.com/" in text
+    )
 
 
 def clean_identifier(value: str, kind: str) -> str:
@@ -57,6 +79,14 @@ def extract_zpid(value: str) -> str:
     return ""
 
 
+def extract_zip(*values: str) -> str:
+    for value in values:
+        matches = re.findall(r"(?<!\d)(\d{5})(?:-\d{4})?(?!\d)", str(value or ""))
+        if matches:
+            return matches[-1]
+    return ""
+
+
 def canonical_url(value: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -69,7 +99,7 @@ def canonical_url(value: str) -> str:
         return text.split("?", 1)[0].split("#", 1)[0].rstrip("/").lower()
 
 
-def _template_actor_input(template_text: str, listing_url: str, address: str, limit: int) -> dict[str, Any]:
+def _template_actor_input(template_text: str, listing_url: str, address: str, zip_code: str, limit: int) -> dict[str, Any]:
     if not template_text:
         return {}
     rendered = (
@@ -77,6 +107,7 @@ def _template_actor_input(template_text: str, listing_url: str, address: str, li
         .replace("{{LISTING_URL}}", listing_url)
         .replace("{{ZILLOW_URL}}", listing_url)
         .replace("{{ADDRESS}}", address)
+        .replace("{{ZIP}}", zip_code)
         .replace("{{LIMIT}}", str(limit))
     )
     try:
@@ -96,6 +127,17 @@ def _replace_url_field(existing: Any, listing_url: str) -> Any:
     return listing_url
 
 
+def _looks_like_zip_search(actor_id: str, base_input: dict[str, Any], input_mode: str) -> bool:
+    actor_text = str(actor_id or "").lower()
+    mode = str(input_mode or "").strip().lower()
+    return (
+        "zip-search" in actor_text
+        or "zillow-zip" in actor_text
+        or "zipcodes" in {str(key).lower() for key in base_input.keys()}
+        or mode in {"zip", "zipcode", "zipcodes", "zip_codes"}
+    )
+
+
 def build_zillow_actor_input(
     listing_url: str,
     address: str = "",
@@ -103,12 +145,22 @@ def build_zillow_actor_input(
     base_input: dict[str, Any] | None = None,
     template_text: str = "",
     input_mode: str = "",
+    actor_id: str = "",
 ) -> dict[str, Any]:
-    templated = _template_actor_input(template_text, listing_url, address, limit)
+    zip_code = extract_zip(address, listing_url)
+    templated = _template_actor_input(template_text, listing_url, address, zip_code, limit)
     if templated:
         return templated
 
     payload = dict(base_input or {})
+    if _looks_like_zip_search(actor_id, payload, input_mode):
+        if zip_code:
+            payload["zipCodes"] = [zip_code]
+        for key in ["maxItems", "maxResults", "maxListings", "resultsLimit", "limit"]:
+            if key in payload:
+                payload[key] = max(int(limit or 10), 1)
+        return payload
+
     known_url_fields = ["startUrls", "urls", "searchUrls", "listingUrls", "detailUrls", "url"]
     for key in known_url_fields:
         if key in payload:
@@ -195,7 +247,9 @@ def _candidate_photo_values(record: Any, depth: int = 0) -> list[str]:
         return []
     urls: list[str] = []
     if isinstance(record, str):
-        if record.startswith(("http://", "https://")) and any(token in record.lower() for token in [".jpg", ".jpeg", ".png", ".webp", "photos", "image"]):
+        if record.startswith(("http://", "https://")) and any(
+            token in record.lower() for token in [".jpg", ".jpeg", ".png", ".webp", "photos", "image"]
+        ):
             urls.append(record)
         return urls
     if isinstance(record, list):
@@ -206,20 +260,18 @@ def _candidate_photo_values(record: Any, depth: int = 0) -> list[str]:
         return urls
 
     photo_keys = {
-        "photos",
-        "photourls",
-        "photoUrls",
-        "images",
-        "imageUrls",
-        "responsivePhotos",
-        "carouselPhotos",
-        "media",
-        "miniCardPhotos",
-        "originalPhotos",
+        "photos", "photourls", "photoUrls", "images", "imageUrls", "responsivePhotos",
+        "carouselPhotos", "media", "miniCardPhotos", "originalPhotos", "photo_all",
+        "photo_main", "imgSrc",
     }
-    url_keys = {"url", "src", "href", "jpeg", "webp", "mixedSources"}
+    url_keys = {"url", "src", "href", "jpeg", "webp", "mixedSources", "imageUrl"}
     for key, value in record.items():
-        if str(key) in photo_keys or str(key) in url_keys or "photo" in str(key).lower() or "image" in str(key).lower():
+        if (
+            str(key) in photo_keys
+            or str(key) in url_keys
+            or "photo" in str(key).lower()
+            or "image" in str(key).lower()
+        ):
             urls.extend(_candidate_photo_values(value, depth + 1))
     return urls
 
@@ -276,6 +328,11 @@ def score_zillow_row(row: dict[str, Any], listing_url: str, address: str = "") -
         elif target_address in row_address or row_address in target_address:
             score += 35
 
+    target_zip = extract_zip(address, listing_url)
+    row_zip = str(data.get("zip") or "")
+    if target_zip and row_zip and target_zip == row_zip:
+        score += 10
+
     if row.get("ok", True):
         score += 5
     if float(data.get("asking_price") or 0) > 0:
@@ -299,11 +356,23 @@ def _configured_result(listing_url: str, address: str, limit: int) -> dict[str, 
     if not token:
         return {"ok": False, "error": "APIFY_TOKEN is missing from Streamlit secrets.", "source": "Apify Zillow Live Pull"}
 
-    task_id = clean_identifier(get_secret("APIFY_ZILLOW_TASK_ID", "") or get_secret("APIFY_TASK_ID", ""), "task")
-    actor_id = clean_identifier(get_secret("APIFY_ZILLOW_ACTOR_ID", "") or get_secret("APIFY_ACTOR_ID", ""), "actor")
-    dataset_id = clean_identifier(get_secret("APIFY_ZILLOW_DATASET_ID", "") or get_secret("APIFY_DATASET_ID", ""), "dataset")
+    task_id = clean_identifier(
+        get_secret("APIFY_ZILLOW_TASK_ID", "") or get_secret("APIFY_TASK_ID", ""),
+        "task",
+    )
+    actor_id = clean_identifier(
+        get_secret("APIFY_ZILLOW_ACTOR_ID", "")
+        or get_secret("APIFY_ACTOR_ID", "")
+        or DEFAULT_ZIP_SEARCH_ACTOR,
+        "actor",
+    )
+    dataset_id = clean_identifier(
+        get_secret("APIFY_ZILLOW_DATASET_ID", "") or get_secret("APIFY_DATASET_ID", ""),
+        "dataset",
+    )
     template_text = get_secret("APIFY_ZILLOW_INPUT_JSON", "")
     input_mode = get_secret("APIFY_ZILLOW_INPUT_MODE", "")
+    zip_code = extract_zip(address, listing_url)
 
     if task_id:
         task_input = fetch_task_input(task_id, token)
@@ -314,8 +383,15 @@ def _configured_result(listing_url: str, address: str, limit: int) -> dict[str, 
             base_input=task_input,
             template_text=template_text,
             input_mode=input_mode,
+            actor_id=actor_id,
         )
-        result = run_task_for_items(task_id, actor_input, token, limit=limit)
+        if _looks_like_zip_search(actor_id, task_input, input_mode) and not zip_code:
+            return {
+                "ok": False,
+                "source": "Apify Zillow Task",
+                "error": "The Zillow ZIP-search task needs a 5-digit ZIP in the property address or Zillow URL.",
+            }
+        result = run_task_for_items(task_id, actor_input, token, limit=max(limit, 100))
         result["configured_id"] = task_id
         result["actor_input"] = actor_input
         if result.get("ok"):
@@ -328,34 +404,38 @@ def _configured_result(listing_url: str, address: str, limit: int) -> dict[str, 
             limit=limit,
             template_text=template_text,
             input_mode=input_mode,
+            actor_id=actor_id,
         )
-        result = run_actor_for_items(actor_id, actor_input, token, limit=limit)
+        if _looks_like_zip_search(actor_id, actor_input, input_mode) and not zip_code:
+            return {
+                "ok": False,
+                "source": "Apify Zillow Actor",
+                "error": "The Zillow ZIP-search actor needs a 5-digit ZIP in the property address or Zillow URL.",
+            }
+        result = run_actor_for_items(actor_id, actor_input, token, limit=max(limit, 100))
         result["configured_id"] = actor_id
         result["actor_input"] = actor_input
         if result.get("ok"):
             return result
 
     if dataset_id:
-        result = fetch_dataset_items(dataset_id, token, limit=max(limit, 25))
+        result = fetch_dataset_items(dataset_id, token, limit=max(limit, 100))
         result["configured_id"] = dataset_id
         if result.get("ok"):
             result["source"] = "Configured Apify Zillow Dataset"
             return result
 
-    configured = [name for name, value in [("task", task_id), ("actor", actor_id), ("dataset", dataset_id)] if value]
-    if configured:
-        return result
-    return {
-        "ok": False,
-        "source": "Apify Zillow Live Pull",
-        "error": "No saved Zillow scraper is configured. Add APIFY_TASK_ID (preferred), APIFY_ZILLOW_ACTOR_ID, or APIFY_DATASET_ID to Streamlit secrets.",
-    }
+    return result
 
 
 def pull_zillow_listing(listing_url: str, address: str = "", limit: int = 10) -> dict[str, Any]:
     url = str(listing_url or "").strip()
     if not is_zillow_url(url):
-        return {"ok": False, "source": "Apify Zillow Live Pull", "error": "Paste a complete Zillow property URL beginning with https://."}
+        return {
+            "ok": False,
+            "source": "Apify Zillow Live Pull",
+            "error": "Paste a complete Zillow property URL beginning with https://.",
+        }
 
     result = _configured_result(url, address, max(int(limit or 10), 1))
     if not result.get("ok"):
@@ -367,7 +447,7 @@ def pull_zillow_listing(listing_url: str, address: str = "", limit: int = 10) ->
         return {
             "ok": False,
             "source": result.get("source", "Apify Zillow Live Pull"),
-            "error": "The scraper returned rows, but none safely matched the pasted Zillow URL or property address.",
+            "error": "The ZIP scraper returned properties, but none safely matched the pasted Zillow URL or property address.",
             "row_count": len(rows),
         }
 
