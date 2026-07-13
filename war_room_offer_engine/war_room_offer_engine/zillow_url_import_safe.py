@@ -5,6 +5,8 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
+import pandas as pd
+
 try:
     import zillow_url_import as base
 except ImportError:
@@ -22,9 +24,9 @@ build_zillow_actor_input = base.build_zillow_actor_input
 
 
 def _first_nonblank(record: dict[str, Any], *keys: str) -> Any:
-    lower = {str(key).lower(): key for key in record.keys()}
+    lower = {str(key).strip().lower(): key for key in record.keys()}
     for key in keys:
-        actual = lower.get(key.lower())
+        actual = lower.get(str(key).strip().lower())
         if actual is not None:
             value = record.get(actual)
             if value not in [None, "", 0, 0.0, [], {}]:
@@ -98,18 +100,9 @@ def _photo_urls_from_value(value: Any, depth: int = 0) -> list[str]:
 
 def extract_photo_urls(record: dict[str, Any]) -> list[str]:
     fields = [
-        "photo_all",
-        "photo_main",
-        "photos",
-        "photoUrls",
-        "images",
-        "imageUrls",
-        "carouselPhotos",
-        "responsivePhotos",
-        "miniCardPhotos",
-        "originalPhotos",
-        "imgSrc",
-        "media",
+        "photo_all", "photo_main", "photos", "photoUrls", "images", "imageUrls",
+        "carouselPhotos", "responsivePhotos", "miniCardPhotos", "originalPhotos",
+        "imgSrc", "media",
     ]
     seen: set[str] = set()
     result: list[str] = []
@@ -144,31 +137,21 @@ def _enrich_from_raw(data: dict[str, Any], raw_record: dict[str, Any]) -> dict[s
         "property_type": ("property_type", "propertyType", "homeType"),
         "days_on_market": ("days_on_market", "daysOnZillow", "daysOnMarket", "timeOnZillow", "dom"),
         "status": ("status", "homeStatus", "listingStatus"),
-        "listing_url": ("url", "detailUrl", "DetailURL", "hdpUrl", "listingUrl"),
+        "listing_url": ("url", "detailUrl", "DetailURL", "hdpUrl", "listingUrl", "Zillow_Link"),
         "listing_agent_name": ("listing_agent_name", "agent_name", "agentName", "listedBy"),
         "listing_agent_phone": ("listing_agent_phone", "agent_phone", "agentPhone", "phone"),
         "listing_agent_email": ("listing_agent_email", "agent_email", "agent_emai", "agentEmail"),
         "listing_brokerage": ("listing_brokerage", "agent_brokerage", "brokerageName", "brokerName", "BrokerName"),
         "rent": ("RC_Rent_Clean", "RC_Rent_Estimate", "rent", "rentZestimate", "rentEstimate"),
-        "arv": ("zestimate", "estimatedValue", "homeValue", "redfinEstimate", "realtorEstimate"),
+        "arv": ("zestimate", "estimatedValue", "homeValue", "redfinEstimate", "realtorEstimate", "ARV"),
         "taxes": ("taxes", "annualTaxes", "propertyTaxes"),
         "tax_assessed_value": ("taxAssessedValue", "assessedValue", "taxAssessment"),
         "last_sale_price": ("last_sale_price", "soldPrice", "lastSoldPrice", "lastSalePrice"),
         "last_sale_date": ("last_sale_date", "soldDate", "lastSoldDate", "lastSaleDate"),
     }
     numeric = {
-        "asking_price",
-        "beds",
-        "baths",
-        "sqft",
-        "lot_size",
-        "year_built",
-        "days_on_market",
-        "rent",
-        "arv",
-        "taxes",
-        "tax_assessed_value",
-        "last_sale_price",
+        "asking_price", "beds", "baths", "sqft", "lot_size", "year_built",
+        "days_on_market", "rent", "arv", "taxes", "tax_assessed_value", "last_sale_price",
     }
     for target, keys in aliases.items():
         if enriched.get(target) not in [None, "", 0, 0.0, [], {}]:
@@ -212,50 +195,127 @@ def _strict_match(rows: list[dict[str, Any]], listing_url: str, address: str = "
     return None
 
 
+def _sheet_urls() -> list[tuple[str, str]]:
+    candidates = [
+        ("APIFY_ZILLOW_SHEET_CSV_URL", "Apify Zillow Sheet"),
+        ("LEADS_SHEET_CSV_URL", "Leads/Master Feed Sheet"),
+        ("MASTER_FEED_CSV_URL", "Master Feed Sheet"),
+        ("RAW_FEED_CSV_URL", "Raw Feed Sheet"),
+    ]
+    result: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for secret_name, label in candidates:
+        url = str(base.get_secret(secret_name, "") or "").strip()
+        if url and url not in seen:
+            seen.add(url)
+            result.append((url, label))
+    return result
+
+
+def _row_matches_zillow(row: dict[str, Any], listing_url: str) -> bool:
+    target_zpid = base.extract_zpid(listing_url)
+    target_url = base.canonical_url(listing_url)
+    row_text = json.dumps(row, default=str)
+    if target_zpid and target_zpid in row_text:
+        return True
+    for key in ["url", "listing_url", "Zillow_Link", "zillow_link", "detailUrl", "DetailURL"]:
+        value = _first_nonblank(row, key)
+        if not value:
+            continue
+        candidate = base.canonical_url(str(value))
+        if target_url and candidate and (target_url == candidate or target_url in candidate or candidate in target_url):
+            return True
+    return False
+
+
+def _sheet_fallback(listing_url: str) -> dict[str, Any]:
+    errors: list[str] = []
+    for csv_url, label in _sheet_urls():
+        try:
+            df = pd.read_csv(csv_url)
+        except Exception as exc:
+            errors.append(f"{label} could not be read: {exc}")
+            continue
+        if df.empty:
+            errors.append(f"{label} was empty.")
+            continue
+        for _, series in df.iterrows():
+            row = {str(k): v for k, v in series.to_dict().items()}
+            if not _row_matches_zillow(row, listing_url):
+                continue
+            normalized = base.normalize_zillow_records([row])
+            rows = normalized.get("rows", []) or []
+            selected = rows[0] if rows else {"ok": True, "data": {}}
+            data = _enrich_from_raw(dict(selected.get("data", {}) or {}), row)
+            data["listing_url"] = data.get("listing_url") or listing_url
+            data["zillow_link"] = data.get("zillow_link") or data["listing_url"]
+            missing = [
+                field for field in ["address", "asking_price", "beds", "baths", "sqft"]
+                if data.get(field) in [None, "", 0, 0.0, [], {}]
+            ]
+            warnings = []
+            if missing:
+                warnings.append("Missing from sheet fallback: " + ", ".join(missing))
+            return {
+                "ok": True,
+                "source": label,
+                "record": data,
+                "selected_row": selected,
+                "missing_fields": missing,
+                "warnings": warnings,
+                "row_count": 1,
+                "configured_id": "sheet-fallback",
+                "actor_input": {},
+            }
+    return {
+        "ok": False,
+        "source": "Google Sheet fallback",
+        "error": "No matching Zillow ID or listing URL was found in the configured Google Sheet feeds. " + " | ".join(errors[:3]),
+    }
+
+
 def pull_zillow_listing(listing_url: str, address: str = "", limit: int = 10) -> dict[str, Any]:
     url = str(listing_url or "").strip()
     if not base.is_zillow_url(url):
-        return {
-            "ok": False,
-            "source": "Apify Zillow Live Pull",
-            "error": "Paste a complete Zillow property URL beginning with https://.",
-        }
+        raise RuntimeError("Paste a complete Zillow property URL beginning with https://.")
 
-    result = base._configured_result(url, address, max(int(limit or 10), 1))
-    if not result.get("ok"):
-        return result
+    live_result = base._configured_result(url, address, max(int(limit or 10), 1))
+    if live_result.get("ok"):
+        rows = live_result.get("rows", []) or []
+        selected = _strict_match(rows, url, address)
+        if selected is not None:
+            data = dict(selected.get("data", {}) or {})
+            raw_items = live_result.get("raw_items", []) or []
+            raw_record = base._raw_item_for_normalized_row(selected, raw_items) if raw_items else {}
+            data = _enrich_from_raw(data, raw_record)
+            data["listing_url"] = data.get("listing_url") or url
+            data["zillow_link"] = data.get("zillow_link") or data["listing_url"]
+            required = ["address", "asking_price", "beds", "baths", "sqft"]
+            missing = [field for field in required if data.get(field) in [None, "", 0, 0.0, [], {}]]
+            warnings = list(selected.get("warnings", []) or [])
+            if missing:
+                warnings.append("Missing from Zillow pull: " + ", ".join(missing))
+            return {
+                "ok": True,
+                "source": live_result.get("source", "Apify Zillow Live Pull"),
+                "record": data,
+                "selected_row": selected,
+                "missing_fields": missing,
+                "warnings": warnings,
+                "row_count": len(rows),
+                "configured_id": live_result.get("configured_id", ""),
+                "actor_input": live_result.get("actor_input", {}),
+            }
 
-    rows = result.get("rows", []) or []
-    selected = _strict_match(rows, url, address)
-    if selected is None:
-        return {
-            "ok": False,
-            "source": result.get("source", "Apify Zillow Live Pull"),
-            "error": "The Zillow scraper returned properties, but none safely matched the pasted Zillow URL or address.",
-            "row_count": len(rows),
-        }
+    sheet_result = _sheet_fallback(url)
+    if sheet_result.get("ok"):
+        warning = str(live_result.get("error") or "Live Apify pull did not return a safe match.")
+        sheet_result.setdefault("warnings", []).append("Live pull unavailable; used Google Sheet fallback. " + warning)
+        return sheet_result
 
-    data = dict(selected.get("data", {}) or {})
-    raw_items = result.get("raw_items", []) or []
-    raw_record = base._raw_item_for_normalized_row(selected, raw_items) if raw_items else {}
-    data = _enrich_from_raw(data, raw_record)
-    data["listing_url"] = data.get("listing_url") or url
-    data["zillow_link"] = data.get("zillow_link") or data["listing_url"]
-
-    required = ["address", "asking_price", "beds", "baths", "sqft"]
-    missing = [field for field in required if data.get(field) in [None, "", 0, 0.0, [], {}]]
-    warnings = list(selected.get("warnings", []) or [])
-    if missing:
-        warnings.append("Missing from Zillow pull: " + ", ".join(missing))
-
-    return {
-        "ok": True,
-        "source": result.get("source", "Apify Zillow Live Pull"),
-        "record": data,
-        "selected_row": selected,
-        "missing_fields": missing,
-        "warnings": warnings,
-        "row_count": len(rows),
-        "configured_id": result.get("configured_id", ""),
-        "actor_input": result.get("actor_input", {}),
-    }
+    live_error = str(live_result.get("error") or "Live Apify pull did not return a safe property match.")
+    sheet_error = str(sheet_result.get("error") or "No sheet fallback match was found.")
+    raise RuntimeError(
+        "Zillow import failed, so analysis was stopped before using default values. "
+        f"Live pull: {live_error} Sheet fallback: {sheet_error}"
+    )
