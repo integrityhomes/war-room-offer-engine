@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 try:
+    import workspace_mode  # noqa: F401 - installs left-sidebar single-workspace navigation
+except ImportError:
+    try:
+        from . import workspace_mode  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import workspace_mode  # noqa: F401
+
+try:
     import one_load_sources as base
     import zillow_url_import_safe as zillow_safe
     from zillow_score_patch import safe_score_zillow_row
