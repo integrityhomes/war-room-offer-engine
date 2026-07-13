@@ -1,14 +1,6 @@
 from __future__ import annotations
 
 try:
-    import ui_runtime_guard  # noqa: F401 - installs safe state updates and sidebar quick tools
-except ImportError:
-    try:
-        from . import ui_runtime_guard  # noqa: F401
-    except ImportError:
-        from war_room_offer_engine import ui_runtime_guard  # noqa: F401
-
-try:
     import one_load_sources as base
     import zillow_url_import_safe as zillow_safe
     from zillow_score_patch import safe_score_zillow_row
