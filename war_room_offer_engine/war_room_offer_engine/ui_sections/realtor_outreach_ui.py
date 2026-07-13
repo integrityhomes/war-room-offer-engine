@@ -3,6 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 try:
+    import one_load_sources_safe  # noqa: F401 - installs hardened Zillow pull into One-Load
+except ImportError:
+    try:
+        from .. import one_load_sources_safe  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import one_load_sources_safe  # noqa: F401
+
+try:
     from realtor_outreach import build_master_feed_fields, build_realtor_contact_package
 except ImportError:
     try:
