@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 try:
@@ -29,6 +30,18 @@ _NUMBER_WIDGET_SOURCES = {
     "one_load_asking_price": "asking_price",
 }
 
+_QUICK_TOOLS = [
+    ("🏠", "One-Load", "one-load-deal-analyzer"),
+    ("🔎", "Pull Data", "1-pull-property-data"),
+    ("🛡️", "Protection", "deal-protection-mode"),
+    ("🏷️", "Rent", "rent-fallback-mode"),
+    ("📈", "Buyer Demand", "buyer-demand-exit-confidence"),
+    ("📣", "Dispo", "buyer-outreach-dispo-test"),
+    ("🛠️", "Repairs", "3-repair-condition-analyzer"),
+    ("🏘️", "Comps / ARV", "automatic-sold-comps"),
+    ("✅", "QA / Decision", "war-room-greatness-test-full-system-qa"),
+]
+
 
 def _blank(value: Any) -> bool:
     return value in [None, "", 0, 0.0, [], {}]
@@ -52,12 +65,7 @@ def _source_value(st, source_key: str) -> Any:
 
 
 def _install_one_load_widget_autofill() -> None:
-    """Fill the visible One-Load widgets on the rerun after a successful import.
-
-    The wrappers only touch the five One-Load fields that should mirror imported
-    Zillow data. They run before each widget is instantiated, which avoids the
-    Streamlit restriction against changing a widget after it has been rendered.
-    """
+    """Fill the visible One-Load widgets on the rerun after a successful import."""
     try:
         import streamlit as st
     except Exception:
@@ -98,6 +106,134 @@ def _install_one_load_widget_autofill() -> None:
 
 
 _install_one_load_widget_autofill()
+
+
+def _find_ui_context():
+    """Locate the One-Load caller's ui context without coupling this panel to app.py."""
+    frame = inspect.currentframe()
+    try:
+        while frame is not None:
+            candidate = frame.f_locals.get("ui")
+            if candidate is not None and callable(getattr(candidate, "update_state_from_auto_pull", None)):
+                return candidate
+            frame = frame.f_back
+    finally:
+        del frame
+    return None
+
+
+def _is_widget_state_order_error(exc: Exception) -> bool:
+    text = f"{exc.__class__.__name__}: {exc}".lower()
+    return (
+        "streamlitapiexception" in text
+        or "cannot be modified after the widget with key" in text
+        or ("session_state" in text and "after the widget" in text)
+    )
+
+
+def _install_safe_auto_pull_state_order(st) -> None:
+    """Recover auto-pulled values through a rerun when widgets already exist.
+
+    The Property Data section can receive listing URL, agent, rent, and pricing data
+    after its widgets have been instantiated. Streamlit blocks those late writes.
+    We queue the merged record, rerun, and apply it before that section is drawn.
+    """
+    ui = _find_ui_context()
+    if ui is None:
+        return
+
+    original = getattr(ui, "_war_room_original_auto_pull_update", None)
+    if original is None:
+        original = ui.update_state_from_auto_pull
+        ui._war_room_original_auto_pull_update = original
+
+    pending = st.session_state.pop("_war_room_pending_auto_pull", None)
+    if isinstance(pending, dict) and pending:
+        original(pending)
+        st.session_state["_war_room_auto_pull_notice"] = (
+            "Property data was safely applied after the page reran. The repair section is available below."
+        )
+
+    if getattr(ui, "_war_room_safe_auto_pull_installed", False):
+        return
+
+    def safe_update(data: dict) -> None:
+        try:
+            original(data)
+        except Exception as exc:
+            if not _is_widget_state_order_error(exc):
+                raise
+            st.session_state["_war_room_pending_auto_pull"] = dict(data or {})
+            st.session_state["_war_room_auto_pull_notice"] = (
+                "Property data was queued so Streamlit can apply it before the fields are drawn."
+            )
+            st.rerun()
+
+    ui.update_state_from_auto_pull = safe_update
+    ui._war_room_safe_auto_pull_installed = True
+
+
+def _render_quick_tools(st) -> None:
+    links = "".join(
+        f'<a class="wr-tool-link" href="#{anchor}" target="_self"><span>{icon}</span>{label}</a>'
+        for icon, label, anchor in _QUICK_TOOLS
+    )
+    html = f"""
+    <style>
+      .wr-tool-dock {{
+        position: fixed;
+        right: 12px;
+        top: 82px;
+        width: 168px;
+        z-index: 9999;
+        padding: 10px;
+        border: 1px solid rgba(120,120,120,.35);
+        border-radius: 14px;
+        background: rgba(250,250,250,.96);
+        box-shadow: 0 8px 24px rgba(0,0,0,.16);
+        backdrop-filter: blur(8px);
+      }}
+      .wr-tool-title {{
+        font-weight: 800;
+        font-size: 14px;
+        margin: 0 0 7px 2px;
+        color: #202124;
+      }}
+      .wr-tool-link {{
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin: 5px 0;
+        padding: 8px 9px;
+        border-radius: 9px;
+        background: #ffffff;
+        border: 1px solid #dedede;
+        color: #202124 !important;
+        text-decoration: none !important;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.15;
+      }}
+      .wr-tool-link:hover {{
+        border-color: #ff4b4b;
+        background: #fff5f5;
+        transform: translateX(-2px);
+      }}
+      @media (max-width: 760px) {{ .wr-tool-dock {{ display: none; }} }}
+    </style>
+    <div class="wr-tool-dock">
+      <div class="wr-tool-title">Quick Tools</div>
+      {links}
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+    with st.sidebar:
+        st.divider()
+        st.markdown("### Quick Tools")
+        st.caption("Jump directly to a section.")
+        for icon, label, anchor in _QUICK_TOOLS:
+            st.markdown(f"[{icon} **{label}**](#{anchor})")
 
 
 def _as_list(value: Any) -> list[str]:
@@ -213,7 +349,12 @@ def _request_visible_autofill_rerun(st, normalized: dict[str, Any]) -> None:
 
 
 def render_realtor_outreach_panel(st, normalized: dict[str, Any]) -> None:
+    _install_safe_auto_pull_state_order(st)
+    _render_quick_tools(st)
     _request_visible_autofill_rerun(st, normalized)
+
+    if st.session_state.pop("_war_room_auto_pull_notice", ""):
+        st.success("Property data was applied safely. Use the Quick Tools repair box to jump to Repairs.")
 
     package = build_visible_outreach_package(normalized)
     contact_package = package["contact_package"]
