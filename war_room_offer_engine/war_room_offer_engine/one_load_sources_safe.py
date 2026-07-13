@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 try:
+    import zillow_score_patch  # noqa: F401 - installs formatted-price-safe Zillow scoring
+except ImportError:
+    try:
+        from . import zillow_score_patch  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import zillow_score_patch  # noqa: F401
+
+try:
     import one_load_sources as base
     from zillow_url_import_safe import pull_zillow_listing
 except ImportError:
