@@ -80,6 +80,22 @@ def normalize_email(value: Any) -> str:
     return match.group(0) if match else ""
 
 
+def _looks_like_company(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    company_terms = [
+        " llc",
+        " inc",
+        " corp",
+        " properties",
+        " property group",
+        " realty",
+        " brokerage",
+        " real estate",
+        " holdings",
+    ]
+    return any(term in f" {text}" for term in company_terms)
+
+
 def extract_realtor_contact(record: dict[str, Any], normalized: dict[str, Any] | None = None) -> dict[str, str]:
     normalized = normalized or {}
     name = first_nonblank(
@@ -98,12 +114,22 @@ def extract_realtor_contact(record: dict[str, Any], normalized: dict[str, Any] |
         normalized.get("listing_brokerage"),
         pick(record, ["agent_brokerage", "brokerageName", "brokerName", "BrokerName", "attributionInfo.brokerName"]),
     )
+
+    raw_name = str(name or "").strip()
+    brokerage_text = str(brokerage or "").strip()
+    same_as_brokerage = bool(raw_name and brokerage_text and raw_name.lower() == brokerage_text.lower())
+    if raw_name and (same_as_brokerage or _looks_like_company(raw_name)):
+        if not brokerage_text:
+            brokerage_text = raw_name
+        raw_name = ""
+
     return {
-        "name": str(name or "").strip(),
+        "name": raw_name,
+        "raw_name": str(name or "").strip(),
         "phone": display_phone(phone),
         "phone_e164": normalize_phone(phone),
         "email": normalize_email(email),
-        "brokerage": str(brokerage or "").strip(),
+        "brokerage": brokerage_text,
     }
 
 
@@ -123,7 +149,13 @@ def _map_line_type(value: str) -> tuple[str, bool | None]:
 def classify_phone(phone: str) -> dict[str, Any]:
     normalized = normalize_phone(phone)
     if not normalized:
-        return {"phone_type": "Missing", "textable": False, "confidence": "Missing", "source": "None", "warning": "No realtor phone number was found."}
+        return {
+            "phone_type": "Missing",
+            "textable": False,
+            "confidence": "Missing",
+            "source": "None",
+            "warning": "No realtor phone number was found.",
+        }
 
     account_sid = get_secret("TWILIO_ACCOUNT_SID", "")
     auth_token = get_secret("TWILIO_AUTH_TOKEN", "")
@@ -144,20 +176,44 @@ def classify_phone(phone: str) -> dict[str, Any]:
             timeout=20,
         )
     except Exception as exc:
-        return {"phone_type": "Unknown", "textable": None, "confidence": "Lookup failed", "source": "Twilio Lookup", "warning": f"Phone lookup failed: {exc}"}
+        return {
+            "phone_type": "Unknown",
+            "textable": None,
+            "confidence": "Lookup failed",
+            "source": "Twilio Lookup",
+            "warning": f"Phone lookup failed: {exc}",
+        }
 
     if response.status_code < 200 or response.status_code >= 300:
-        return {"phone_type": "Unknown", "textable": None, "confidence": "Lookup failed", "source": "Twilio Lookup", "warning": f"Phone lookup returned HTTP {response.status_code}."}
+        return {
+            "phone_type": "Unknown",
+            "textable": None,
+            "confidence": "Lookup failed",
+            "source": "Twilio Lookup",
+            "warning": f"Phone lookup returned HTTP {response.status_code}.",
+        }
 
     try:
         body = response.json()
     except Exception:
-        return {"phone_type": "Unknown", "textable": None, "confidence": "Lookup failed", "source": "Twilio Lookup", "warning": "Phone lookup returned invalid data."}
+        return {
+            "phone_type": "Unknown",
+            "textable": None,
+            "confidence": "Lookup failed",
+            "source": "Twilio Lookup",
+            "warning": "Phone lookup returned invalid data.",
+        }
 
     intelligence = body.get("line_type_intelligence") or {}
     error_code = intelligence.get("error_code")
     if error_code:
-        return {"phone_type": "Unknown", "textable": None, "confidence": "Lookup incomplete", "source": "Twilio Lookup", "warning": f"Phone lookup error code: {error_code}"}
+        return {
+            "phone_type": "Unknown",
+            "textable": None,
+            "confidence": "Lookup incomplete",
+            "source": "Twilio Lookup",
+            "warning": f"Phone lookup error code: {error_code}",
+        }
 
     phone_type, textable = _map_line_type(intelligence.get("type", ""))
     warning = ""
@@ -165,7 +221,14 @@ def classify_phone(phone: str) -> dict[str, Any]:
         warning = "This appears to be a landline or non-textable line. Call or email instead."
     elif textable is None:
         warning = "Text capability is not confirmed. Verify before sending SMS."
-    return {"phone_type": phone_type, "textable": textable, "confidence": "Verified", "source": "Twilio Lookup", "warning": warning, "carrier": intelligence.get("carrier_name", "")}
+    return {
+        "phone_type": phone_type,
+        "textable": textable,
+        "confidence": "Verified",
+        "source": "Twilio Lookup",
+        "warning": warning,
+        "carrier": intelligence.get("carrier_name", ""),
+    }
 
 
 def money(value: Any) -> str:
@@ -194,19 +257,21 @@ def build_first_touch_outreach(
     offer = money(offer_price)
     asking = money(asking_price)
     close_text = f"close in about {int(closing_days or 14)} days"
+    walkthrough_text = "This offer is contingent on a walkthrough and confirmation of the property condition."
 
     if offer:
         text = (
             f"Hi {first_name}, this is Shawn. I’m reaching out about {address}. "
             f"We can offer {offer}, purchase as-is, and {close_text}. "
-            "Is the seller open to reviewing that? Please text me back when you can."
+            f"{walkthrough_text} Is the seller open to reviewing that? Please text me back when you can."
         )
         subject = f"Offer for {address} — {offer}"
         email_body = (
             f"Hi {first_name},\n\n"
             f"I’m reaching out regarding {address}. Based on the information currently available, "
             f"we can offer {offer}, purchase the property as-is, and {close_text}. "
-            "The offer would be subject to confirming title, access, and the property information provided.\n\n"
+            "This offer is contingent on a walkthrough, confirmation of the property condition, "
+            "and confirmation of title, access, and the property information provided.\n\n"
             "Please let me know whether the seller is open to reviewing this or if there is a price range that would receive serious consideration.\n\n"
             "Thank you,\nShawn"
         )
@@ -214,20 +279,22 @@ def build_first_touch_outreach(
         price_reference = f" The current asking price appears to be {asking}." if asking else ""
         text = (
             f"Hi {first_name}, this is Shawn. I’m looking at {address}.{price_reference} "
-            "Is it still available, and does the seller have any flexibility for an as-is purchase with a clean closing?"
+            "Is it still available, and does the seller have any flexibility for an as-is purchase with a clean closing? "
+            "Any offer would be contingent on a walkthrough and confirmation of the property condition."
         )
         subject = f"Question about {address}"
         email_body = (
             f"Hi {first_name},\n\n"
             f"I’m reviewing {address}.{price_reference} Is the property still available, and does the seller have any flexibility "
-            "for an as-is purchase with a straightforward closing? If so, please share any known repairs, occupancy details, and the seller’s timing.\n\n"
+            "for an as-is purchase with a straightforward closing? Any offer would be contingent on a walkthrough and confirmation "
+            "of the property condition. Please share any known repairs, occupancy details, and the seller’s timing.\n\n"
             "Thank you,\nShawn"
         )
 
     follow_up = (
         f"Hi {first_name}, following up on {address}. Were you able to confirm whether the seller would consider "
         + (f"the {offer} as-is offer" if offer else "an as-is offer below asking")
-        + "?"
+        + "? The offer would remain contingent on a walkthrough and confirmation of the property condition."
     )
     return {"text": text, "email_subject": subject, "email_body": email_body, "follow_up_text": follow_up}
 
@@ -279,7 +346,7 @@ def build_master_feed_fields(
     outreach = contact_package.get("outreach", {}) or {}
     phone_info = contact_package.get("phone_info", {}) or {}
     behavior = "Unknown — verify responsiveness, seller flexibility, repairs, timing, and preferred contact method."
-    strategy = "Send the first-touch message, confirm availability and seller flexibility, then negotiate without exceeding the Deal Engine internal max."
+    strategy = "Send the first-touch message, confirm availability and seller flexibility, then negotiate without exceeding the Deal Engine internal max. Any offer remains contingent on a walkthrough."
     return {
         "Max_Price": max_price or "",
         "Offer_Price": opening_offer or "",
