@@ -17,6 +17,14 @@ except ImportError:
         from war_room_offer_engine import single_section_workspace  # noqa: F401
 
 try:
+    import rentcast_comp_alias_patch  # noqa: F401 - recognize RentCast comparable field names
+except ImportError:
+    try:
+        from . import rentcast_comp_alias_patch  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_comp_alias_patch  # noqa: F401
+
+try:
     import rentcast_auto_comps_patch  # noqa: F401 - parse RentCast rent/value comps and auto-store them
 except ImportError:
     try:
