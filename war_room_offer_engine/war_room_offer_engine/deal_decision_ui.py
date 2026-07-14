@@ -20,6 +20,41 @@ except ImportError:
             number, source_settings,
         )
 
+try:
+    from deal_library_ui import (
+        apply_pending_restore,
+        auto_save_completed_analysis,
+        initialize_deal_library_state,
+        load_query_deal_if_requested,
+        render_deal_library_box,
+    )
+except ImportError:
+    try:
+        from .deal_library_ui import (
+            apply_pending_restore,
+            auto_save_completed_analysis,
+            initialize_deal_library_state,
+            load_query_deal_if_requested,
+            render_deal_library_box,
+        )
+    except ImportError:
+        from war_room_offer_engine.deal_library_ui import (
+            apply_pending_restore,
+            auto_save_completed_analysis,
+            initialize_deal_library_state,
+            load_query_deal_if_requested,
+            render_deal_library_box,
+        )
+
+try:
+    from deal_library_preflight import open_saved_before_paid_pull
+except ImportError:
+    try:
+        from .deal_library_preflight import open_saved_before_paid_pull
+    except ImportError:
+        from war_room_offer_engine.deal_library_preflight import open_saved_before_paid_pull
+
+
 SOURCE_OPTIONS = [
     "Zillow / On-Market", "MLS / Agent", "XLeads / Cold Text",
     "Off-Market Seller", "Facebook / Referral", "Other",
@@ -38,6 +73,10 @@ RESET_KEYS = [
     "rentcast_value_comps", "rentcast_value_comp_count", "auto_sold_comps",
     "auto_arv_summary", "repairs", "repair_analysis", "recommended_repairs_from_analyzer",
     "repair_source", "repair_notes", "last_source_results", "last_auto_pull",
+    "deal_library_deal_id", "deal_library_version", "deal_library_status",
+    "deal_library_assigned_to", "deal_library_updated_by", "deal_library_team_notes",
+    "deal_library_last_saved_at", "deal_library_loaded_without_api",
+    "deal_library_last_message", "deal_library_last_error", "deal_library_force_refresh",
 ]
 
 
@@ -94,6 +133,10 @@ def _install_log_fields(st, ui) -> None:
             "next_follow_up": st.session_state.get("decision_next_follow_up", ""),
             "negotiation_notes": st.session_state.get("decision_negotiation_notes", ""),
             "other_negotiated_terms": st.session_state.get("decision_other_terms", ""),
+            "deal_library_id": st.session_state.get("deal_library_deal_id", ""),
+            "team_deal_status": st.session_state.get("deal_library_status", ""),
+            "assigned_to": st.session_state.get("deal_library_assigned_to", ""),
+            "team_notes": st.session_state.get("deal_library_team_notes", ""),
         })
         return row
 
@@ -199,6 +242,8 @@ def _run(st, ui, media_files: list[Any]) -> None:
     st.session_state["decision_result"] = decision
     st.session_state["decision_engine_result"] = engine_result
     st.session_state["decision_last_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    st.session_state["deal_library_loaded_without_api"] = False
+    auto_save_completed_analysis(st)
 
 
 def _live_decision(st, ui) -> dict[str, Any]:
@@ -264,10 +309,16 @@ def _reset(st) -> None:
 
 
 def render(st, ui, original_renderer: Callable, exit_mode_value: str = "Auto") -> None:
+    initialize_deal_library_state(st)
+    apply_pending_restore(st)
+    load_query_deal_if_requested(st)
     initialize(st)
+    st.session_state.setdefault("deal_library_force_refresh", False)
     _install_log_fields(st, ui)
     st.header("Deal Decision Center")
     st.caption("Paste one address or listing link. The app pulls everything it can and gives one clear decision.")
+    if st.session_state.get("deal_library_loaded_without_api"):
+        st.success("Saved deal loaded from the Team Deal Library. No paid property-data credits were used.")
     first = st.columns([2.2, 1.2, 1.1])
     with first[0]:
         st.text_input("Property address or listing link", key="decision_property_input", placeholder="1115 Matson Dr, Marion, VA 24354 or Zillow link")
@@ -291,6 +342,11 @@ def render(st, ui, original_renderer: Callable, exit_mode_value: str = "Auto") -
         t1.text_area("Negotiation Notes", height=90, key="decision_negotiation_notes")
         t2.text_area("Other Important Terms", height=90, key="decision_other_terms")
     media = st.file_uploader("Optional property photos or walkthrough video", type=["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v", "avi"], accept_multiple_files=True, key="decision_media")
+    st.checkbox(
+        "Refresh live paid data even if this property is already saved",
+        key="deal_library_force_refresh",
+        help="Leave this off for normal use. Turn it on only when you intentionally want fresh Zillow, RentCast or Apify data.",
+    )
     buttons = st.columns([3, 1])
     analyze = buttons[0].button("Pull Everything & Tell Me", type="primary", use_container_width=True)
     reset = buttons[1].button("Start New Property", type="secondary", use_container_width=True)
@@ -301,10 +357,14 @@ def render(st, ui, original_renderer: Callable, exit_mode_value: str = "Auto") -
         if not str(st.session_state.get("decision_property_input", "")).strip():
             st.error("Enter a property address or listing link first.")
         else:
+            if not st.session_state.get("deal_library_force_refresh", False):
+                open_saved_before_paid_pull(st)
             with st.spinner("Pulling property facts, RentCast rents and comps, sold comps, condition, and offer numbers..."):
                 _run(st, ui, media or [])
+            st.session_state["deal_library_force_refresh"] = False
             st.success("Automatic analysis complete.")
     _render_decision(st, _live_decision(st, ui))
+    render_deal_library_box(st)
     with st.expander("Advanced engine controls and full audit details", expanded=False):
         st.caption("Every existing detailed input, formula, comp, override, message, and audit field remains available here.")
         original_renderer(st, ui, exit_mode_value)
