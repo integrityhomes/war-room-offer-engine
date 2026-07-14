@@ -38,8 +38,9 @@ check(len(workspace.SECTION_OPTIONS) == 9, "all nine workspace tools are availab
 check(len(set(workspace.RENDER_SECTION_MAP.values())) == 8, "each primary renderer has one workspace section")
 
 calls: list[str] = []
+workspace._render_decision_center = lambda *args, **kwargs: calls.append("Deal Decision Center")
 namespace = {
-    "render_one_load_deal_section": lambda *args, **kwargs: calls.append("One-Load"),
+    "render_one_load_deal_section": lambda *args, **kwargs: calls.append("Legacy One-Load"),
     "render_lead_intake_section": lambda *args, **kwargs: calls.append("Pull Data"),
     "render_deal_protection_section": lambda *args, **kwargs: calls.append("Protection"),
     "render_rent_fallback_section": lambda *args, **kwargs: calls.append("Rent"),
@@ -55,7 +56,7 @@ for name in workspace.RENDER_SECTION_MAP:
 namespace["render_one_load_deal_section"](fake_st, SimpleNamespace())
 namespace["render_lead_intake_section"](fake_st, SimpleNamespace())
 namespace["render_repair_section"](fake_st, SimpleNamespace())
-check(calls == ["One-Load"], "only the selected One-Load renderer opens")
+check(calls == ["Deal Decision Center"], "One-Load opens the simplified Deal Decision Center")
 
 fake_st.session_state["war_room_active_section"] = "🛠️ Repairs"
 repair_result = namespace["render_repair_section"](fake_st, SimpleNamespace())
@@ -67,14 +68,7 @@ fake_st.session_state["repair_media_files"] = ["saved-file"]
 fake_st.session_state["war_room_active_section"] = "🏠 One-Load"
 hidden_repair_result = namespace["render_repair_section"](fake_st, SimpleNamespace())
 check(hidden_repair_result == ["saved-file"], "closed Repairs preserves saved media for decision math")
-
-check(
-    workspace.SECTION_NAMES["🏘️ Comps / ARV"] == "Comps / ARV",
-    "Comps and ARV has its own workspace selection",
-)
-check(
-    workspace.SECTION_NAMES["✅ QA / Decision"] == "QA / Decision",
-    "QA and Decision has its own workspace selection",
-)
+check(workspace.SECTION_NAMES["🏘️ Comps / ARV"] == "Comps / ARV", "Comps and ARV remains separate")
+check(workspace.SECTION_NAMES["✅ QA / Decision"] == "QA / Decision", "QA and Decision remains separate")
 
 print("Single-section workspace smoke test passed.")
