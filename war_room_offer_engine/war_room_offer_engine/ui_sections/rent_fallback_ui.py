@@ -29,21 +29,30 @@ def _normalized_data(st) -> dict:
 
 def _rentcast_comps(st) -> list[dict]:
     data = _normalized_data(st)
-    comps = data.get("rent_comps", []) or []
+    comps = data.get("rent_comps", []) or st.session_state.get("rentcast_rent_comps", []) or []
     return [item for item in comps if isinstance(item, dict) and float(item.get("rent", 0) or 0) > 0]
 
 
 def _apply_rentcast_state(st, data: dict, comps: list[dict]) -> None:
-    rent = int(float(data.get("rent") or data.get("rent_estimate") or 0))
+    rent = int(float(data.get("rent") or data.get("rent_estimate") or st.session_state.get("rent", 0) or 0))
+    count = max(
+        len(comps),
+        int(float(data.get("rent_comp_count") or 0)),
+        int(float(st.session_state.get("rentcast_rent_comp_count", 0) or 0)),
+        int(float(st.session_state.get("rentcast_comp_count", 0) or 0)),
+    )
     if rent > 0:
         st.session_state["rent"] = rent
     st.session_state["rent_source"] = "RentCast"
     st.session_state["rent_confidence"] = (
-        "Strong verified rent comps" if len(comps) >= 3 else "Medium fallback comps" if rent > 0 else "Missing"
+        "Strong verified rent comps" if count >= 3 else "Medium fallback comps" if rent > 0 else "Missing"
     )
-    st.session_state["rent_verification_needed"] = "No" if len(comps) >= 3 else "Yes"
-    st.session_state["rentcast_comp_count"] = len(comps)
-    st.session_state["rentcast_submitted_address"] = data.get("rentcast_submitted_address", "")
+    st.session_state["rent_verification_needed"] = "No" if count >= 3 else "Yes"
+    st.session_state["rentcast_rent_comps"] = comps
+    st.session_state["rentcast_rent_comp_count"] = count
+    st.session_state["rentcast_comp_count"] = count
+    st.session_state["rent_comp_count"] = count
+    st.session_state["rentcast_submitted_address"] = data.get("rentcast_submitted_address", st.session_state.get("rentcast_submitted_address", ""))
 
 
 def render_rent_fallback_section(st, ui) -> None:
@@ -52,16 +61,17 @@ def render_rent_fallback_section(st, ui) -> None:
 
     data = _normalized_data(st)
     comps = _rentcast_comps(st)
-    rentcast_rent = int(float(data.get("rent") or data.get("rent_estimate") or 0))
-    rentcast_error = str(data.get("rentcast_rent_error") or "")
-    submitted_address = str(data.get("rentcast_submitted_address") or "")
+    rentcast_rent = int(float(data.get("rent") or data.get("rent_estimate") or st.session_state.get("rent", 0) or 0))
+    rentcast_error = str(data.get("rentcast_rent_error") or st.session_state.get("rentcast_rent_error", "") or "")
+    submitted_address = str(data.get("rentcast_submitted_address") or st.session_state.get("rentcast_submitted_address", "") or "")
 
     if rentcast_rent > 0 or comps:
         _apply_rentcast_state(st, data, comps)
+        verified_count = int(st.session_state.get("rentcast_rent_comp_count", len(comps)) or 0)
         st.success(
-            f"RentCast verified ${rentcast_rent:,.0f}/month with {len(comps)} comparable rental(s)."
+            f"RentCast verified ${rentcast_rent:,.0f}/month with {verified_count} comparable rental(s)."
             if rentcast_rent > 0
-            else f"RentCast returned {len(comps)} comparable rental(s)."
+            else f"RentCast returned {verified_count} comparable rental(s)."
         )
         if submitted_address:
             st.caption(f"Address submitted to RentCast: {submitted_address}")
@@ -82,7 +92,7 @@ def render_rent_fallback_section(st, ui) -> None:
             st.dataframe(ui.pd.DataFrame(rows), use_container_width=True)
         metrics = st.columns(4)
         metrics[0].metric("RentCast Rent", ui.money(rentcast_rent))
-        metrics[1].metric("Comparable Count", len(comps))
+        metrics[1].metric("Comparable Count", verified_count)
         metrics[2].metric("Comp Average", ui.money(data.get("rent_comp_average", 0)))
         metrics[3].metric("Comp Median", ui.money(data.get("rent_comp_median", 0)))
         st.info(f"Rent confidence: {st.session_state.get('rent_confidence', 'Missing')}")
