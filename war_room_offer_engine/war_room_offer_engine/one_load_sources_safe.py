@@ -9,6 +9,14 @@ except ImportError:
         from war_room_offer_engine import hide_floating_quick_tools  # noqa: F401
 
 try:
+    import single_section_workspace  # noqa: F401 - show one selected War Room section at a time
+except ImportError:
+    try:
+        from . import single_section_workspace  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import single_section_workspace  # noqa: F401
+
+try:
     import one_load_sources as base
     import zillow_url_import_safe as zillow_safe
     from zillow_score_patch import safe_score_zillow_row
