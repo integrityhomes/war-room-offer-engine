@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+try:
+    from rentcast_auto_comps_ui import render_rentcast_rent_comps_panel
+except ImportError:
+    try:
+        from ..rentcast_auto_comps_ui import render_rentcast_rent_comps_panel
+    except ImportError:
+        from war_room_offer_engine.rentcast_auto_comps_ui import render_rentcast_rent_comps_panel
+
 
 RENT_FALLBACK_SOURCES = [
     "Manual rent comps",
@@ -21,11 +29,22 @@ RENT_CONFIDENCE_LEVELS = [
 
 
 def render_rent_fallback_section(st, ui) -> None:
-    st.subheader("Rent Fallback Mode")
-    st.caption("Use fallback rent comps only when RentCast cannot verify rent. Seller-stated rent stays reference-only.")
+    st.subheader("Rent Analysis")
+    st.caption(
+        "RentCast is the primary source. Manual fallback inputs appear only when RentCast returns no usable comparable rentals."
+    )
 
-    with st.container(border=True):
-        st.warning("RentCast could not verify rent. Slow Flip numbers are not reliable until rent comps are manually verified.")
+    automatic_comps_found = render_rentcast_rent_comps_panel(st)
+
+    with st.expander(
+        "Manual rent fallback" if automatic_comps_found else "Manual rent fallback — RentCast needs help",
+        expanded=not automatic_comps_found,
+    ):
+        if automatic_comps_found:
+            st.info("Automatic RentCast comps are available above. Use this section only to override or document a different rent conclusion.")
+        else:
+            st.warning("RentCast could not verify rent. Slow Flip numbers are not reliable until rent comps are verified.")
+
         top = st.columns(3)
         with top[0]:
             st.selectbox("Fallback rent source", RENT_FALLBACK_SOURCES, key="rent_fallback_source")
@@ -36,7 +55,7 @@ def render_rent_fallback_section(st, ui) -> None:
 
         st.caption("Manual rent comp inputs")
         for idx in range(1, 4):
-            with st.expander(f"Manual rent comp {idx}", expanded=idx == 1):
+            with st.expander(f"Manual rent comp {idx}", expanded=(idx == 1 and not automatic_comps_found)):
                 cols = st.columns([2, 1, 1, 1, 1, 1])
                 with cols[0]:
                     st.text_input("Rent comp address / area", key=f"manual_rent_comp_{idx}_area")
@@ -69,5 +88,5 @@ def render_rent_fallback_section(st, ui) -> None:
         cols[1].metric("Rent Confidence", state.get("rent_confidence", "Weak"))
         cols[2].metric("Manual Comps", state.get("manual_rent_comp_count", 0))
         cols[3].metric("Fallback Average", ui.money(state.get("manual_rent_comp_average", 0)))
-        if state.get("rent_verification_needed") == "Yes":
+        if state.get("rent_verification_needed") == "Yes" and not automatic_comps_found:
             st.warning(state.get("slow_flip_rent_risk", "Verify rent comps manually."))
