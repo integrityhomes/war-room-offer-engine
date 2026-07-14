@@ -40,7 +40,8 @@ def open_saved_before_paid_pull(st) -> bool:
     """Open an existing saved property before any paid source is called.
 
     Returns False only when no saved match exists or the Deal Library is not
-    connected. A successful match reruns Streamlit immediately.
+    connected. A successful or ambiguous saved match reruns Streamlit before
+    paid APIs can execute.
     """
     if not is_connected() or st.session_state.get("deal_library_force_refresh", False):
         return False
@@ -82,6 +83,9 @@ def open_saved_before_paid_pull(st) -> bool:
             st.session_state["deal_library_last_message"] = (
                 "Multiple saved properties matched. Open the correct saved deal below before using paid data."
             )
+            st.session_state["deal_library_last_error"] = ""
+            st.rerun()
+            return True
         return False
 
     result = get_deal(str(chosen.get("deal_id", "")))
