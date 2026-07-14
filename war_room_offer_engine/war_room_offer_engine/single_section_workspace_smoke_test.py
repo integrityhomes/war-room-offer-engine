@@ -49,6 +49,12 @@ namespace = {
     "render_decision_section": lambda *args, **kwargs: calls.append("QA / Decision"),
 }
 
+# Keep this smoke test focused on the section router. The dedicated decision-center
+# smoke test validates the new One-Load decision UI and deal math.
+workspace._render_simple_one_load = (
+    lambda st, ui, original, exit_mode="Auto": original(st, ui, exit_mode)
+)
+
 for name in workspace.RENDER_SECTION_MAP:
     workspace._wrap_renderer(namespace, name, fake_st)
 
