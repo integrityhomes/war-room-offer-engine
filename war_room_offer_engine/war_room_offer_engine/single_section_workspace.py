@@ -62,7 +62,15 @@ def _render_comps_only(st, ui):
             from .ui_sections.comps_ui import render_comps_section
         except ImportError:
             from war_room_offer_engine.ui_sections.comps_ui import render_comps_section
+    try:
+        from rentcast_auto_comps_ui import render_rentcast_value_comps_panel
+    except ImportError:
+        try:
+            from .rentcast_auto_comps_ui import render_rentcast_value_comps_panel
+        except ImportError:
+            from war_room_offer_engine.rentcast_auto_comps_ui import render_rentcast_value_comps_panel
     st.header("🏘️ Comps / ARV")
+    render_rentcast_value_comps_panel(st)
     render_comps_section(st, ui)
     return st.session_state.get("repair_media_files", []) or []
 
