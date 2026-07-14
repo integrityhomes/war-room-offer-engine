@@ -50,7 +50,6 @@ def initialize(st) -> None:
         "deal_vault_saved_by": str(_secret(st, "DEAL_VAULT_DEFAULT_USER", "") or ""),
         "deal_vault_drive_folder_url": "",
         "deal_vault_search": "",
-        "deal_vault_selected_id": "",
         "deal_vault_records": [],
         "deal_vault_records_loaded": False,
         "deal_vault_last_status": "",
@@ -220,12 +219,20 @@ def render_box(st, media_files: list[Any] | None = None) -> None:
             st.caption("The app will automatically create the Deal Vault and Deal History tabs after connection.")
             return
 
+        st.markdown(
+            f"[Open Team Deal Vault Sheet](https://docs.google.com/spreadsheets/d/{config.get('sheet_id')}/edit)"
+        )
         loaded = st.session_state.get("deal_vault_loaded_record", {}) or {}
         if loaded:
             st.success(
                 f"Loaded from Team Deal Vault — {_age_label(str(loaded.get('last_saved_utc', '')))}. "
                 "No property-data credits were used to reopen it."
             )
+            media_refs = st.session_state.get("deal_vault_media_references", []) or []
+            if media_refs:
+                names = [str(item.get("file_name", "")) for item in media_refs if isinstance(item, dict) and item.get("file_name")]
+                if names:
+                    st.caption("Saved walkthrough/media references: " + ", ".join(names))
 
         top = st.columns(3)
         top[0].checkbox("Use saved deal first", key="deal_vault_use_saved_first", help="Loads a saved snapshot before calling paid data sources.")
@@ -259,11 +266,13 @@ def render_box(st, media_files: list[Any] | None = None) -> None:
             option_ids = [str(record.get("deal_id")) for record in matches]
             labels = {str(record.get("deal_id")): _record_label(record) for record in matches}
             current = str(st.session_state.get("deal_vault_selected_id", ""))
-            index = option_ids.index(current) if current in option_ids else 0
+            if current not in option_ids:
+                st.session_state["deal_vault_selected_id"] = option_ids[0]
+                current = option_ids[0]
             selected = st.selectbox(
                 "Saved Deals",
                 option_ids,
-                index=index,
+                index=option_ids.index(current),
                 format_func=lambda item: labels.get(item, item),
                 key="deal_vault_selected_id",
             )
@@ -276,6 +285,7 @@ def render_box(st, media_files: list[Any] | None = None) -> None:
                 if queue_record_load(st, selected_record):
                     st.rerun()
         else:
+            st.session_state.pop("deal_vault_selected_id", None)
             st.info("No saved deals match this search yet.")
 
         save_cols = st.columns([2, 1])
