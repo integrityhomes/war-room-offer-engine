@@ -136,10 +136,11 @@ def build_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "deal_id": deal_id,
+        "base_version": int(state.get("deal_library_version", 0) or 0),
         "saved_at": now,
         "address": str(state.get("address") or state.get("decision_property_input") or ""),
         "city": str(state.get("city") or ""),
-        "state": str(state.get("state") or ""),
+        "property_state": str(state.get("state") or ""),
         "zip": str(state.get("zip") or ""),
         "listing_url": str(state.get("listing_url") or ""),
         "lead_source": str(state.get("decision_lead_source") or state.get("lead_source") or ""),
@@ -167,22 +168,26 @@ def build_snapshot(state: dict[str, Any]) -> dict[str, Any]:
             len(state.get("auto_sold_comps", []) or []),
         ),
         "repairs": state.get("repairs", 0),
-        "state": persisted,
+        "session_state": persisted,
     }
 
 
 def restore_snapshot(state: Any, snapshot: dict[str, Any]) -> None:
-    payload = snapshot.get("state", {}) if isinstance(snapshot, dict) else {}
+    if not isinstance(snapshot, dict):
+        raise ValueError("Saved deal is not a valid snapshot.")
+    # Backward compatibility for any early prototype rows that used `state`.
+    payload = snapshot.get("session_state", snapshot.get("state", {}))
     if not isinstance(payload, dict):
         raise ValueError("Saved deal does not contain a valid state snapshot.")
     for key, value in payload.items():
         state[key] = value
     state["deal_library_deal_id"] = snapshot.get("deal_id", "")
+    state["deal_library_version"] = int(snapshot.get("version", snapshot.get("base_version", 0)) or 0)
     state["deal_library_status"] = snapshot.get("deal_status", "Analyzing")
     state["deal_library_assigned_to"] = snapshot.get("assigned_to", "")
     state["deal_library_team_notes"] = snapshot.get("team_notes", "")
     state["deal_library_updated_by"] = snapshot.get("updated_by", "")
-    state["deal_library_last_saved_at"] = snapshot.get("saved_at", "")
+    state["deal_library_last_saved_at"] = snapshot.get("updated_at", snapshot.get("saved_at", ""))
     state["deal_library_loaded_without_api"] = True
 
 
