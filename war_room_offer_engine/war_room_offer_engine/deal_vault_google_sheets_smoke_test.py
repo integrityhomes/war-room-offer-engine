@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 
 from deal_vault_google_sheets import (
     HISTORY_HEADERS,
@@ -8,8 +9,24 @@ from deal_vault_google_sheets import (
     VAULT_HEADERS,
     VAULT_TAB,
     DealVaultSheets,
+    config_from_secrets,
+    parse_sheet_id,
 )
 from deal_vault_snapshot import build_snapshot, summary_from_state
+
+
+class AttrMapping(Mapping):
+    def __init__(self, values):
+        self.values = values
+
+    def __getitem__(self, key):
+        return self.values[key]
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def __len__(self):
+        return len(self.values)
 
 
 class MemoryVault(DealVaultSheets):
@@ -42,6 +59,24 @@ class MemoryVault(DealVaultSheets):
         else:
             raise AssertionError(range_name)
 
+
+assert parse_sheet_id("https://docs.google.com/spreadsheets/d/abc-123_XYZ/edit") == "abc-123_XYZ"
+config = config_from_secrets(
+    {
+        "DEAL_VAULT_SHEET_URL": "https://docs.google.com/spreadsheets/d/abc-123_XYZ/edit",
+        "gcp_service_account": AttrMapping(
+            {
+                "client_email": "vault@example.iam.gserviceaccount.com",
+                "private_key": "line-one\\nline-two",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        ),
+    }
+)
+assert config["configured"]
+assert config["sheet_id"] == "abc-123_XYZ"
+assert "\\n" not in config["service_account"]["private_key"]
+assert "\n" in config["service_account"]["private_key"]
 
 BASE_STATE = {
     "address": "1115 Matson Dr, Marion, VA 24354",
@@ -107,8 +142,8 @@ assert vault.records[0]["last_saved_by"] == "Sabrina"
 assert "decision_current_negotiated_price" in updated["changed_fields"]
 assert vault.history[-1]["action"] == "Updated"
 
-found = vault.find("1115 Matson Dr", records=vault.list_deals())
+found = vault.find("1115 Matson Drive, Marion VA 24354", records=vault.list_deals())
 assert found is not None
 assert found["deal_id"] == summary["deal_id"]
 
-print("Deal Vault create, upsert, load, duplicate lookup, and history smoke test passed.")
+print("Deal Vault secrets, create, upsert, load, normalized lookup, and history smoke test passed.")
