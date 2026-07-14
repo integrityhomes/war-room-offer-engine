@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from deal_decision_logic import AUTO, SLOW_KEEP, SLOW_WHOLESALE, build_decision, evaluate
+from deal_decision_logic import (
+    AUTO,
+    SLOW_KEEP,
+    SLOW_WHOLESALE,
+    build_decision,
+    evaluate,
+    rent_comp_count,
+    rent_verified,
+    sold_count,
+)
 
 
 ASSUMPTIONS = {
@@ -62,4 +71,34 @@ assert build_decision(above_max, ASSUMPTIONS, ENGINE, AUTO)["decision"] == "DO N
 missing_rent = dict(STATE, rent=0, rentcast_rent_comp_count=0, rent_verification_needed="Yes")
 assert build_decision(missing_rent, ASSUMPTIONS, ENGINE, AUTO)["decision"] == "HUMAN REVIEW"
 
-print("Deal Decision Center Marion smoke test passed.")
+# Regression: merged RentCast enrichment originally used `rentcast_comp_count`
+# and nested `one_load_normalized.data.rent_comps`, while the decision screen
+# checked only `rentcast_rent_comp_count`. Actual returned comps must win over a
+# stale verification flag in the same Streamlit run.
+live_rentcast_state = dict(STATE)
+live_rentcast_state.pop("rentcast_rent_comp_count")
+live_rentcast_state.pop("rentcast_value_comp_count")
+live_rentcast_state.update(
+    {
+        "rent": 1040,
+        "rent_confidence": "Weak",
+        "rent_verification_needed": "Yes",
+        "rentcast_comp_count": 4,
+        "one_load_normalized": {
+            "data": {
+                "rent": 1040,
+                "rent_confidence": "Strong verified rent comps",
+                "rent_comp_count": 4,
+                "rent_comps": [{"rent": 1300}, {"rent": 750}, {"rent": 1350}, {"rent": 1100}],
+                "rentcast_sold_comp_count": 3,
+                "rentcast_sold_comps": [{"sold_price": 34000}, {"sold_price": 37000}, {"sold_price": 36000}],
+            }
+        },
+    }
+)
+assert rent_comp_count(live_rentcast_state) == 4
+assert rent_verified(live_rentcast_state)
+assert sold_count(live_rentcast_state) == 3
+assert build_decision(live_rentcast_state, ASSUMPTIONS, ENGINE, AUTO)["decision"] == "BUY"
+
+print("Deal Decision Center Marion and RentCast state smoke tests passed.")
