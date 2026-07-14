@@ -74,7 +74,10 @@ Use the live app URL for `DEAL_LIBRARY_APP_URL`. It creates one-click team links
 - Update assignment, status and team notes as negotiations move forward.
 - Use **Save / Update Deal for Team** after manual changes.
 - Reopen from **Find Saved Deals** or send the generated deal link.
-- Press **Pull Everything & Tell Me** again only when fresh Zillow, RentCast or Apify data is intentionally needed.
+- When the main analysis button is pressed, the app checks the Deal Library before paid APIs. An existing saved property opens automatically without new Zillow, RentCast or Apify charges.
+- Leave **Refresh live paid data even if this property is already saved** turned off during normal use.
+- Turn that refresh checkbox on only when the team intentionally needs new live data and accepts the additional API usage.
+- When multiple saved properties match, the app stops and asks the user to choose instead of spending credits on a new pull.
 
 ## Team protection
 
