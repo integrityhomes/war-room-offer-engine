@@ -49,6 +49,7 @@ STATE = {
     "deal_library_assigned_to": "Carlos",
     "deal_library_team_notes": "Seller counter expected Friday.",
     "deal_library_updated_by": "Shawn",
+    "deal_library_version": 3,
 }
 
 
@@ -59,6 +60,8 @@ assert stable_deal_id(STATE) == stable_deal_id({"address": "1115 Matson Drive Ma
 
 snapshot = build_snapshot(STATE)
 assert snapshot["deal_id"]
+assert snapshot["base_version"] == 3
+assert snapshot["property_state"] == "VA"
 assert snapshot["decision"] == "BUY"
 assert snapshot["deal_lane"] == "Slow Flip — Keep"
 assert snapshot["current_negotiated_price"] == 25000
@@ -66,18 +69,23 @@ assert snapshot["absolute_maximum"] == 32000
 assert snapshot["rent_comp_count"] == 4
 assert snapshot["sold_comp_count"] == 3
 assert snapshot["assigned_to"] == "Carlos"
-assert snapshot["state"]["rentcast_rent_comps"][0]["rent"] == 1300
-assert snapshot["state"]["repair_analysis"]["recommended_repair_number"] == 63476
+assert snapshot["session_state"]["rentcast_rent_comps"][0]["rent"] == 1300
+assert snapshot["session_state"]["repair_analysis"]["recommended_repair_number"] == 63476
 json.dumps(snapshot)
 
+snapshot["version"] = 4
+snapshot["updated_at"] = "2026-07-14T10:00:00Z"
 restored = {}
 restore_snapshot(restored, snapshot)
 assert restored["address"] == STATE["address"]
+assert restored["state"] == "VA"
 assert restored["decision_result"]["decision"] == "BUY"
 assert restored["rentcast_rent_comp_count"] == 4
 assert restored["auto_comp_count"] == 3
 assert restored["deal_library_loaded_without_api"] is True
 assert restored["deal_library_status"] == "Negotiating"
 assert restored["deal_library_team_notes"] == "Seller counter expected Friday."
+assert restored["deal_library_version"] == 4
+assert restored["deal_library_last_saved_at"] == "2026-07-14T10:00:00Z"
 
 print("Google Sheet Team Deal Library smoke test passed.")
