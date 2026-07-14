@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import re
-from typing import Any, Callable
+from typing import Any
 
 
 SECTION_OPTIONS = [
@@ -54,6 +54,17 @@ def _hidden_return(function_name: str, st):
     return None
 
 
+def _render_decision_center(st, ui, original, exit_mode_value: str = "Auto"):
+    try:
+        from deal_decision_ui import render
+    except ImportError:
+        try:
+            from .deal_decision_ui import render
+        except ImportError:
+            from war_room_offer_engine.deal_decision_ui import render
+    return render(st, ui, original, exit_mode_value)
+
+
 def _render_comps_only(st, ui):
     try:
         from ui_sections.comps_ui import render_comps_section
@@ -77,9 +88,12 @@ def _wrap_renderer(namespace: dict[str, Any], function_name: str, st) -> None:
 
     def guarded(*args, **kwargs):
         current = active_section(st)
+        st_arg = args[0] if args else st
+        ui_arg = args[1] if len(args) > 1 else kwargs.get("ui")
+        if function_name == "render_one_load_deal_section" and current == "One-Load":
+            exit_value = args[2] if len(args) > 2 else kwargs.get("exit_mode", "Auto")
+            return _render_decision_center(st_arg, ui_arg, original, exit_value)
         if function_name == "render_repair_section" and current == "Comps / ARV":
-            st_arg = args[0] if args else st
-            ui_arg = args[1] if len(args) > 1 else kwargs.get("ui")
             return _render_comps_only(st_arg, ui_arg)
         if current != expected_section:
             return _hidden_return(function_name, st)
@@ -127,15 +141,8 @@ def install_workspace() -> bool:
         text = str(body or "").strip()
         match = QUICK_LINK_PATTERN.match(text)
         if match and match.group(1) in {
-            "One-Load",
-            "Pull Data",
-            "Protection",
-            "Rent",
-            "Buyer Demand",
-            "Dispo",
-            "Repairs",
-            "Comps / ARV",
-            "QA / Decision",
+            "One-Load", "Pull Data", "Protection", "Rent", "Buyer Demand",
+            "Dispo", "Repairs", "Comps / ARV", "QA / Decision",
         }:
             if not getattr(st, "_war_room_workspace_radio_rendered", False):
                 st._war_room_workspace_radio_rendered = True
