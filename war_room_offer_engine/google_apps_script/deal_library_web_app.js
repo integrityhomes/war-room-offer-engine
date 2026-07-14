@@ -9,7 +9,7 @@ const DEAL_HEADERS = [
   'Current Negotiated Price', 'Starting Offer', 'Absolute Maximum', 'Rent',
   'Rent Comp Count', 'ARV', 'Sold Comp Count', 'Repairs', 'Deal Status',
   'Assigned To', 'Team Notes', 'Updated By', 'Updated At', 'Created At',
-  'Snapshot Version ID', 'Snapshot Chunks'
+  'Version', 'Snapshot Version ID', 'Snapshot Chunks'
 ];
 
 const HISTORY_HEADERS = ['Version ID'].concat(DEAL_HEADERS);
@@ -54,9 +54,7 @@ function doPost(e) {
 
 function assertAuthorized_(providedToken) {
   const expected = PropertiesService.getScriptProperties().getProperty('DEAL_LIBRARY_TOKEN') || '';
-  if (expected && providedToken !== expected) {
-    throw new Error('Unauthorized Deal Library request.');
-  }
+  if (expected && providedToken !== expected) throw new Error('Unauthorized Deal Library request.');
 }
 
 function spreadsheet_() {
@@ -97,25 +95,19 @@ function number_(value) {
   return isNaN(parsed) ? 0 : parsed;
 }
 
-function indexMap_(headers) {
-  const map = {};
-  headers.forEach((header, index) => map[header] = index);
-  return map;
-}
-
 function rowObject_(headers, row) {
   const result = {};
   headers.forEach((header, index) => result[header] = row[index]);
   return result;
 }
 
-function summaryFromSnapshot_(snapshot, versionId, chunkCount, createdAt) {
+function summaryFromSnapshot_(snapshot, version, versionId, chunkCount, createdAt) {
   const savedAt = normalizeText_(snapshot.saved_at) || new Date().toISOString();
   return {
     'Deal ID': normalizeText_(snapshot.deal_id),
     'Address': normalizeText_(snapshot.address),
     'City': normalizeText_(snapshot.city),
-    'State': normalizeText_(snapshot.state),
+    'State': normalizeText_(snapshot.property_state),
     'Zip': normalizeText_(snapshot.zip),
     'Listing URL': normalizeText_(snapshot.listing_url),
     'Lead Source': normalizeText_(snapshot.lead_source),
@@ -137,6 +129,7 @@ function summaryFromSnapshot_(snapshot, versionId, chunkCount, createdAt) {
     'Updated By': normalizeText_(snapshot.updated_by),
     'Updated At': savedAt,
     'Created At': createdAt || savedAt,
+    'Version': version,
     'Snapshot Version ID': versionId,
     'Snapshot Chunks': chunkCount
   };
@@ -164,8 +157,7 @@ function chunkText_(text) {
 }
 
 function writeSnapshot_(sheet, dealId, versionId, snapshot, savedAt) {
-  const json = JSON.stringify(snapshot);
-  const chunks = chunkText_(json);
+  const chunks = chunkText_(JSON.stringify(snapshot));
   const rows = chunks.map((chunk, index) => [dealId, versionId, index + 1, chunks.length, chunk, savedAt]);
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, SNAPSHOT_HEADERS.length).setValues(rows);
   return chunks.length;
@@ -182,40 +174,61 @@ function readSnapshot_(sheet, dealId, versionId) {
 }
 
 function upsertDeal_(snapshot) {
-  const sheets = ensureSheets_();
-  const dealId = normalizeText_(snapshot.deal_id);
-  if (!dealId) return { ok: false, error: 'Saved deal is missing a Deal ID.' };
-  if (!normalizeText_(snapshot.address) && !normalizeText_(snapshot.listing_url)) {
-    return { ok: false, error: 'Saved deal is missing an address or listing URL.' };
-  }
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sheets = ensureSheets_();
+    const dealId = normalizeText_(snapshot.deal_id);
+    if (!dealId) return { ok: false, error: 'Saved deal is missing a Deal ID.' };
+    if (!normalizeText_(snapshot.address) && !normalizeText_(snapshot.listing_url)) {
+      return { ok: false, error: 'Saved deal is missing an address or listing URL.' };
+    }
 
-  const savedAt = normalizeText_(snapshot.saved_at) || new Date().toISOString();
-  const versionId = dealId + '-' + Utilities.getUuid();
-  const existingRow = findDealRow_(sheets.deals, dealId);
-  let createdAt = savedAt;
-  if (existingRow) {
-    const existing = sheets.deals.getRange(existingRow, 1, 1, DEAL_HEADERS.length).getValues()[0];
-    createdAt = normalizeText_(existing[DEAL_HEADERS.indexOf('Created At')]) || savedAt;
-  }
+    const savedAt = normalizeText_(snapshot.saved_at) || new Date().toISOString();
+    const existingRow = findDealRow_(sheets.deals, dealId);
+    let createdAt = savedAt;
+    let currentVersion = 0;
+    if (existingRow) {
+      const existing = sheets.deals.getRange(existingRow, 1, 1, DEAL_HEADERS.length).getValues()[0];
+      createdAt = normalizeText_(existing[DEAL_HEADERS.indexOf('Created At')]) || savedAt;
+      currentVersion = number_(existing[DEAL_HEADERS.indexOf('Version')]);
+    }
 
-  const chunkCount = writeSnapshot_(sheets.snapshots, dealId, versionId, snapshot, savedAt);
-  const summary = summaryFromSnapshot_(snapshot, versionId, chunkCount, createdAt);
-  const row = summaryRow_(summary);
-  if (existingRow) {
-    sheets.deals.getRange(existingRow, 1, 1, DEAL_HEADERS.length).setValues([row]);
-  } else {
-    sheets.deals.appendRow(row);
-  }
-  sheets.history.appendRow([versionId].concat(row));
+    const baseVersion = number_(snapshot.base_version);
+    if (existingRow && baseVersion > 0 && baseVersion !== currentVersion) {
+      return {
+        ok: false,
+        conflict: true,
+        current_version: currentVersion,
+        error: 'This deal was updated by another team member. Reopen the latest saved deal before saving your changes.'
+      };
+    }
 
-  return {
-    ok: true,
-    deal_id: dealId,
-    version_id: versionId,
-    saved_at: savedAt,
-    snapshot_chunks: chunkCount,
-    updated_existing: Boolean(existingRow)
-  };
+    const nextVersion = currentVersion + 1;
+    snapshot.version = nextVersion;
+    const versionId = dealId + '-v' + nextVersion + '-' + Utilities.getUuid();
+    const chunkCount = writeSnapshot_(sheets.snapshots, dealId, versionId, snapshot, savedAt);
+    const summary = summaryFromSnapshot_(snapshot, nextVersion, versionId, chunkCount, createdAt);
+    const row = summaryRow_(summary);
+    if (existingRow) {
+      sheets.deals.getRange(existingRow, 1, 1, DEAL_HEADERS.length).setValues([row]);
+    } else {
+      sheets.deals.appendRow(row);
+    }
+    sheets.history.appendRow([versionId].concat(row));
+
+    return {
+      ok: true,
+      deal_id: dealId,
+      version: nextVersion,
+      version_id: versionId,
+      saved_at: savedAt,
+      snapshot_chunks: chunkCount,
+      updated_existing: Boolean(existingRow)
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function getDeal_(dealId) {
@@ -227,6 +240,8 @@ function getDeal_(dealId) {
   const versionId = normalizeText_(record['Snapshot Version ID']);
   const snapshot = readSnapshot_(sheets.snapshots, normalizeText_(dealId), versionId);
   if (!snapshot) return { ok: false, error: 'Saved deal summary exists, but its full snapshot could not be reconstructed.' };
+  snapshot.version = number_(record['Version']);
+  snapshot.updated_at = normalizeText_(record['Updated At']);
   return { ok: true, deal: publicSummary_(record), snapshot: snapshot };
 }
 
@@ -256,7 +271,8 @@ function publicSummary_(record) {
     team_notes: normalizeText_(record['Team Notes']),
     updated_by: normalizeText_(record['Updated By']),
     updated_at: normalizeText_(record['Updated At']),
-    created_at: normalizeText_(record['Created At'])
+    created_at: normalizeText_(record['Created At']),
+    version: number_(record['Version'])
   };
 }
 
@@ -283,7 +299,5 @@ function searchDeals_(query, requestedLimit) {
 }
 
 function json_(payload) {
-  return ContentService
-    .createTextOutput(JSON.stringify(payload))
-    .setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
 }
