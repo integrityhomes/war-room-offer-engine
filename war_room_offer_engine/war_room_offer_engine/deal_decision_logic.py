@@ -86,18 +86,36 @@ def review_flags(s: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(flags))
 
 
+def rent_comp_count(s: dict[str, Any]) -> int:
+    direct_counts = [
+        int(number(s.get("rentcast_rent_comp_count"))),
+        int(number(s.get("rentcast_comp_count"))),
+        int(number(s.get("rent_comp_count"))),
+        int(number(s.get("manual_rent_comp_count"))),
+    ]
+    direct_counts.append(len(s.get("rentcast_rent_comps", []) or []))
+    normalized = s.get("one_load_normalized", {}) or {}
+    data = normalized.get("data", {}) if isinstance(normalized, dict) else {}
+    if isinstance(data, dict):
+        direct_counts.append(int(number(data.get("rent_comp_count"))))
+        direct_counts.append(len(data.get("rent_comps", []) or []))
+    return max(direct_counts or [0])
+
+
 def rent_verified(s: dict[str, Any]) -> bool:
-    count = max(int(number(s.get("rentcast_rent_comp_count"))), int(number(s.get("manual_rent_comp_count"))))
+    count = rent_comp_count(s)
     confidence = str(s.get("rent_confidence", "")).lower()
-    return number(s.get("rent")) > 0 and str(s.get("rent_verification_needed", "Yes")) != "Yes" and (
-        count >= 3 or "strong" in confidence or "medium" in confidence
-    )
+    # Three real RentCast comps or a strong confidence label are proof by themselves.
+    # Do not let a stale rent_verification_needed='Yes' override the actual comp list.
+    return number(s.get("rent")) > 0 and (count >= 3 or "strong" in confidence)
 
 
 def sold_count(s: dict[str, Any]) -> int:
     return max(
-        int(number(s.get("rentcast_value_comp_count"))), int(number(s.get("auto_comp_count"))),
+        int(number(s.get("rentcast_value_comp_count"))), int(number(s.get("rentcast_sold_comp_count"))),
+        int(number(s.get("auto_comp_count"))),
         int(number(s.get("strong_comp_count"))) + int(number(s.get("good_comp_count"))),
+        len(s.get("rentcast_sold_comps", []) or []),
     )
 
 
