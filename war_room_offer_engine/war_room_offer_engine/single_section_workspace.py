@@ -75,6 +75,30 @@ def _render_comps_only(st, ui):
     return st.session_state.get("repair_media_files", []) or []
 
 
+def _render_simple_one_load(st, ui, original, exit_mode="Auto"):
+    try:
+        import ui_sections.one_load_deal_ui as one_load_module
+    except ImportError:
+        try:
+            from .ui_sections import one_load_deal_ui as one_load_module
+        except ImportError:
+            from war_room_offer_engine.ui_sections import one_load_deal_ui as one_load_module
+    try:
+        from simple_deal_decision_center import render_simple_decision_center
+    except ImportError:
+        try:
+            from .simple_deal_decision_center import render_simple_decision_center
+        except ImportError:
+            from war_room_offer_engine.simple_deal_decision_center import render_simple_decision_center
+    return render_simple_decision_center(
+        st,
+        ui,
+        one_load_module=one_load_module,
+        original_renderer=original,
+        exit_mode=exit_mode,
+    )
+
+
 def _wrap_renderer(namespace: dict[str, Any], function_name: str, st) -> None:
     renderer = namespace.get(function_name)
     if not callable(renderer) or getattr(renderer, "_war_room_single_section", False):
@@ -85,12 +109,15 @@ def _wrap_renderer(namespace: dict[str, Any], function_name: str, st) -> None:
 
     def guarded(*args, **kwargs):
         current = active_section(st)
+        st_arg = args[0] if args else st
+        ui_arg = args[1] if len(args) > 1 else kwargs.get("ui")
         if function_name == "render_repair_section" and current == "Comps / ARV":
-            st_arg = args[0] if args else st
-            ui_arg = args[1] if len(args) > 1 else kwargs.get("ui")
             return _render_comps_only(st_arg, ui_arg)
         if current != expected_section:
             return _hidden_return(function_name, st)
+        if function_name == "render_one_load_deal_section":
+            requested_exit_mode = args[2] if len(args) > 2 else kwargs.get("exit_mode", "Auto")
+            return _render_simple_one_load(st_arg, ui_arg, original, requested_exit_mode)
         return original(*args, **kwargs)
 
     guarded._war_room_single_section = True
