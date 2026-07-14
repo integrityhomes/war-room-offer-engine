@@ -50,16 +50,15 @@ def normalize_text(value: Any) -> str:
 def normalize_address_key(value: Any) -> str:
     text = normalize_text(value).lower()
     text = re.sub(r"https?://(?:www\.)?", "", text)
-    replacements = {
-        " street ": " st ", " avenue ": " ave ", " road ": " rd ",
-        " drive ": " dr ", " lane ": " ln ", " court ": " ct ",
-        " boulevard ": " blvd ", " place ": " pl ",
-    }
-    text = f" {text} "
-    for old, new in replacements.items():
-        text = text.replace(old, new)
     text = re.sub(r"[^a-z0-9]+", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    word_replacements = {
+        "street": "st", "avenue": "ave", "road": "rd", "drive": "dr",
+        "lane": "ln", "court": "ct", "boulevard": "blvd", "place": "pl",
+        "highway": "hwy", "parkway": "pkwy", "circle": "cir", "terrace": "ter",
+        "north": "n", "south": "s", "east": "e", "west": "w",
+    }
+    tokens = [word_replacements.get(token, token) for token in text.split()]
+    return " ".join(tokens)
 
 
 def deal_identity(address: Any = "", listing_url: Any = "", property_input: Any = "") -> tuple[str, str]:
