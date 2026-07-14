@@ -9,6 +9,7 @@ The Apps Script automatically creates and maintains:
 - **Deal Library** — one current, readable row per property.
 - **Deal History** — one row for every save/update version.
 - **Deal Snapshots** — the full app state split into safe chunks so large comp sets do not exceed Google Sheets cell limits.
+- **Deal Library Setup** — the connection values and deployment instructions.
 
 Opening a saved deal restores the prior property facts, rents, rental comps, sold comps, ARV work, repair analysis, negotiation, decision and team notes without calling paid data sources again.
 
@@ -27,42 +28,37 @@ In the Google Sheet:
 1. Open **Extensions → Apps Script**.
 2. Delete the starter code.
 3. Copy all code from:
-   `google_apps_script/deal_library_web_app.js`
+   `setup/google_apps_script/DealLibrary.gs`
 4. Paste it into `Code.gs` and save.
+5. At the top of Apps Script, select the function **setupDealLibrary**.
+6. Click **Run** and approve Google’s permission prompts.
 
-## 3. Add a private access token
+The script creates all four tabs and generates a private token automatically. Open the new **Deal Library Setup** tab to copy the token.
 
-In Apps Script:
-
-1. Open **Project Settings**.
-2. Under **Script Properties**, add:
-   - Property: `DEAL_LIBRARY_TOKEN`
-   - Value: a long private random value.
-3. Optional: add `DEAL_LIBRARY_SPREADSHEET_ID` using the ID from the Google Sheet URL. A bound script normally does not require this, but adding it removes ambiguity.
-
-## 4. Deploy as a web app
+## 3. Deploy as a web app
 
 1. Click **Deploy → New deployment**.
 2. Choose **Web app**.
 3. Execute as: **Me**.
-4. Who has access: choose the option that allows the Streamlit server to call the app. The private token still protects requests.
+4. Who has access: choose **Anyone with the link** so the Streamlit server can call it. Requests are still protected by the private token.
 5. Deploy and copy the `/exec` web-app URL.
+6. Paste that URL into the **Deal Library Setup** tab for your records.
 
-## 5. Add Streamlit secrets
+## 4. Add Streamlit secrets
 
 In the Streamlit app settings, add:
 
 ```toml
 DEAL_LIBRARY_WEBHOOK_URL = "PASTE_THE_APPS_SCRIPT_EXEC_URL_HERE"
-DEAL_LIBRARY_TOKEN = "THE_SAME_PRIVATE_TOKEN"
+DEAL_LIBRARY_TOKEN = "PASTE_TOKEN_FROM_DEAL_LIBRARY_SETUP_TAB"
 DEAL_LIBRARY_APP_URL = "https://war-room-offer-engine.streamlit.app"
 ```
 
-Use the live app URL for `DEAL_LIBRARY_APP_URL`. It is used to create team deep links such as:
+Use the live app URL for `DEAL_LIBRARY_APP_URL`. It creates one-click team links such as:
 
 `https://war-room-offer-engine.streamlit.app/?deal_id=abc123...`
 
-## 6. Test
+## 5. Test
 
 1. Refresh the Streamlit app.
 2. Open **One-Load**.
@@ -80,6 +76,10 @@ Use the live app URL for `DEAL_LIBRARY_APP_URL`. It is used to create team deep 
 - Reopen from **Find Saved Deals** or send the generated deal link.
 - Press **Pull Everything & Tell Me** again only when fresh Zillow, RentCast or Apify data is intentionally needed.
 
+## Team protection
+
+Every save creates a version-history row. If two team members open the same version and one saves first, the second person receives a warning instead of silently overwriting the newer work.
+
 ## Media note
 
-Google Sheets stores the generated repair notes, repair estimate, filenames represented in saved notes, and all analysis results. Large raw video files are not embedded in spreadsheet cells. Keep original walkthrough media in the team's Google Drive property folder and place the Drive folder link in Team Notes. A direct Google Drive media-upload module can be added separately without changing the Deal Library design.
+Google Sheets stores the generated repair notes, repair estimate and all analysis results. Large raw video files are not embedded in spreadsheet cells. Keep original walkthrough media in the team’s Google Drive property folder and place the Drive folder link in Team Notes. A direct Google Drive media-upload module can be added separately without changing the Deal Library design.
