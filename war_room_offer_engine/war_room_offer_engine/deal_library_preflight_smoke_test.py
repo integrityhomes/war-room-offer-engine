@@ -73,4 +73,25 @@ except RerunSignal:
     pass
 assert url_st.session_state["deal_library_pending_snapshot"]["deal_id"] == "saved-123"
 
+# Ambiguous matches must stop the workflow and display choices instead of
+# continuing into Zillow/RentCast/Apify charges.
+preflight.stable_deal_id = lambda state: "no-direct-match"
+preflight.get_deal = lambda deal_id: {"ok": False}
+preflight.search_deals = lambda query, limit=10: {
+    "ok": True,
+    "deals": [
+        {"deal_id": "deal-a", "address": "1115 Matson Dr, Marion, VA 24354", "listing_url": ""},
+        {"deal_id": "deal-b", "address": "1115 Matson Ave, Marion, VA 24354", "listing_url": ""},
+    ],
+}
+ambiguous = FakeSt("Matson Marion VA")
+try:
+    preflight.open_saved_before_paid_pull(ambiguous)
+    raise AssertionError("Expected Streamlit rerun so the user can choose among saved matches.")
+except RerunSignal:
+    pass
+assert len(ambiguous.session_state["deal_library_search_results"]) == 2
+assert "Multiple saved properties matched" in ambiguous.session_state["deal_library_last_message"]
+assert "deal_library_pending_snapshot" not in ambiguous.session_state
+
 print("Deal Library paid-data preflight smoke test passed.")
