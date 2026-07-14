@@ -21,23 +21,35 @@ def hydrate_rentcast_state(st) -> None:
     except Exception:
         rentcast_arv = 0
 
+    rent_comp_count = len(rent_comps)
+    sold_comp_count = len(sold_comps)
+
     if rent > 0:
         st.session_state["rent"] = rent
         st.session_state["rent_source"] = "RentCast"
         st.session_state["rent_confidence"] = (
-            "Strong verified rent comps" if len(rent_comps) >= 3 else "Medium fallback comps"
+            "Strong verified rent comps" if rent_comp_count >= 3 else "Medium fallback comps"
         )
-        st.session_state["rent_verification_needed"] = "No" if len(rent_comps) >= 3 else "Yes"
+        st.session_state["rent_verification_needed"] = "No" if rent_comp_count >= 3 else "Yes"
 
+    # Keep every historical and current field name synchronized. Different app
+    # sections previously used different names for the same RentCast comp count.
     st.session_state["rentcast_rent_comps"] = rent_comps
-    st.session_state["rentcast_comp_count"] = len(rent_comps)
+    st.session_state["rent_comps"] = rent_comps
+    st.session_state["rentcast_comp_count"] = rent_comp_count
+    st.session_state["rentcast_rent_comp_count"] = rent_comp_count
+    st.session_state["rent_comp_count"] = rent_comp_count
     st.session_state["rentcast_submitted_address"] = data.get("rentcast_submitted_address", "")
     st.session_state["rentcast_rent_error"] = data.get("rentcast_rent_error", "")
 
+    st.session_state["rentcast_sold_comps"] = sold_comps
+    st.session_state["rentcast_sold_comp_count"] = sold_comp_count
+    st.session_state["rentcast_value_comp_count"] = sold_comp_count
     if sold_comps:
         st.session_state["auto_sold_comps"] = sold_comps
+        st.session_state["auto_comp_count"] = sold_comp_count
         st.session_state["auto_comp_source"] = "RentCast"
-        st.session_state["auto_comp_messages"] = [f"Automatically loaded {len(sold_comps)} RentCast sold comparable(s)."]
+        st.session_state["auto_comp_messages"] = [f"Automatically loaded {sold_comp_count} RentCast sold comparable(s)."]
     if rentcast_arv > 0:
         st.session_state["rentcast_arv"] = rentcast_arv
         st.session_state["arv_source_used"] = data.get("arv_source", "RentCast AVM")
