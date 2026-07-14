@@ -54,6 +54,7 @@ def initialize_deal_library_state(st) -> None:
         "deal_library_last_error": "",
         "deal_library_last_message": "",
         "deal_library_deal_id": "",
+        "deal_library_version": 0,
         "deal_library_last_saved_at": "",
         "deal_library_loaded_without_api": False,
     }
@@ -75,6 +76,7 @@ def apply_pending_restore(st) -> bool:
     st.session_state["deal_library_last_message"] = (
         "Saved deal restored. No Zillow, RentCast, or Apify credits were used."
     )
+    st.session_state["deal_library_last_error"] = ""
     return True
 
 
@@ -100,12 +102,22 @@ def _save_current(st, *, automatic: bool = False) -> dict[str, Any]:
     result = save_deal(snapshot)
     if result.get("ok"):
         st.session_state["deal_library_deal_id"] = snapshot["deal_id"]
+        st.session_state["deal_library_version"] = int(result.get("version", snapshot.get("base_version", 0)) or 0)
         st.session_state["deal_library_last_saved_at"] = result.get("saved_at", snapshot.get("saved_at", ""))
         verb = "Auto-saved" if automatic else "Saved"
-        st.session_state["deal_library_last_message"] = f"{verb} to the team Deal Library."
+        st.session_state["deal_library_last_message"] = (
+            f"{verb} to the team Deal Library as version {st.session_state['deal_library_version']}."
+        )
         st.session_state["deal_library_last_error"] = ""
     else:
-        st.session_state["deal_library_last_error"] = result.get("error", "Deal could not be saved.")
+        if result.get("conflict"):
+            st.session_state["deal_library_last_error"] = (
+                "A teammate saved a newer version. Open the latest saved deal before updating it. "
+                f"Latest version: {result.get('current_version', 'unknown')} by "
+                f"{result.get('current_updated_by') or 'another team member'}."
+            )
+        else:
+            st.session_state["deal_library_last_error"] = result.get("error", "Deal could not be saved.")
     return result
 
 
@@ -192,7 +204,10 @@ def render_deal_library_box(st) -> None:
         if test_clicked:
             result = health()
             if result.get("ok"):
-                st.session_state["deal_library_last_message"] = "Google Sheet connection is working."
+                st.session_state["deal_library_last_message"] = (
+                    f"Google Sheet connection is working. {result.get('deals_count', 0)} current deal(s) and "
+                    f"{result.get('history_count', 0)} history version(s)."
+                )
                 st.session_state["deal_library_last_error"] = ""
             else:
                 st.session_state["deal_library_last_error"] = result.get("error", "Connection test failed.")
@@ -203,8 +218,9 @@ def render_deal_library_box(st) -> None:
             st.error(st.session_state["deal_library_last_error"])
 
         deal_id = str(st.session_state.get("deal_library_deal_id", "") or "")
+        version = int(st.session_state.get("deal_library_version", 0) or 0)
         if deal_id:
-            st.caption(f"Saved Deal ID: {deal_id}")
+            st.caption(f"Saved Deal ID: {deal_id} | Version: {version or 'Not saved yet'}")
             share_link = _share_link(deal_id)
             if share_link:
                 st.code(share_link)
@@ -252,6 +268,7 @@ def render_deal_library_box(st) -> None:
                         part for part in [
                             str(deal.get("deal_status", "")),
                             str(deal.get("assigned_to", "")),
+                            f"v{deal.get('version')}" if deal.get("version") else "",
                             str(deal.get("updated_at", "")),
                         ] if part
                     )
