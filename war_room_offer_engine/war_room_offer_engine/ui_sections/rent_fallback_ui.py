@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+try:
+    import address_rentcast_bridge  # noqa: F401 - upgrade plain-address RentCast lookups
+except ImportError:
+    try:
+        from .. import address_rentcast_bridge  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import address_rentcast_bridge  # noqa: F401
+
 
 RENT_FALLBACK_SOURCES = [
     "RentCast comparables",
@@ -23,14 +31,42 @@ RENT_CONFIDENCE_LEVELS = [
 
 def _normalized_data(st) -> dict:
     normalized = st.session_state.get("one_load_normalized", {}) or {}
-    data = normalized.get("data", {}) if isinstance(normalized, dict) else {}
-    return data if isinstance(data, dict) else {}
+    original = normalized.get("data", {}) if isinstance(normalized, dict) else {}
+    data = dict(original) if isinstance(original, dict) else {}
+
+    # Plain-address pulls store their returned RentCast data directly in session
+    # state. Merge those fields into the same display model used by Zillow links.
+    state_fallbacks = {
+        "rent": st.session_state.get("rent", 0),
+        "rent_estimate": st.session_state.get("rent", 0),
+        "rent_comps": st.session_state.get("rentcast_rent_comps", []) or st.session_state.get("rent_comps", []),
+        "rent_comp_count": st.session_state.get("rentcast_rent_comp_count", 0) or st.session_state.get("rentcast_comp_count", 0),
+        "rent_comp_average": st.session_state.get("rentcast_rent_comp_average", 0) or st.session_state.get("rent_comp_average", 0),
+        "rent_comp_median": st.session_state.get("rentcast_rent_comp_median", 0) or st.session_state.get("rent_comp_median", 0),
+        "rentcast_submitted_address": st.session_state.get("rentcast_submitted_address", ""),
+        "rentcast_rent_error": st.session_state.get("rentcast_rent_error", ""),
+        "rentcast_lookup_retry_used": st.session_state.get("rentcast_lookup_retry_used", False),
+    }
+    for key, value in state_fallbacks.items():
+        if data.get(key) in [None, "", 0, 0.0, [], {}] and value not in [None, "", 0, 0.0, [], {}]:
+            data[key] = value
+    return data
 
 
 def _rentcast_comps(st) -> list[dict]:
     data = _normalized_data(st)
     comps = data.get("rent_comps", []) or []
-    return [item for item in comps if isinstance(item, dict) and float(item.get("rent", 0) or 0) > 0]
+    clean = []
+    for item in comps:
+        if not isinstance(item, dict):
+            continue
+        try:
+            rent = float(item.get("rent", 0) or 0)
+        except Exception:
+            rent = 0
+        if rent > 0:
+            clean.append(item)
+    return clean
 
 
 def _apply_rentcast_state(st, data: dict, comps: list[dict]) -> None:
@@ -43,6 +79,8 @@ def _apply_rentcast_state(st, data: dict, comps: list[dict]) -> None:
     )
     st.session_state["rent_verification_needed"] = "No" if len(comps) >= 3 else "Yes"
     st.session_state["rentcast_comp_count"] = len(comps)
+    st.session_state["rentcast_rent_comp_count"] = len(comps)
+    st.session_state["rent_comp_count"] = len(comps)
     st.session_state["rentcast_submitted_address"] = data.get("rentcast_submitted_address", "")
 
 
@@ -65,6 +103,8 @@ def render_rent_fallback_section(st, ui) -> None:
         )
         if submitted_address:
             st.caption(f"Address submitted to RentCast: {submitted_address}")
+        if data.get("rentcast_lookup_retry_used"):
+            st.caption("RentCast needed an automatic address-only retry after the subject-attribute lookup returned no usable rental result.")
         if comps:
             rows = []
             for item in comps:
