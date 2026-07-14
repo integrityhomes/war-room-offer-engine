@@ -1,6 +1,17 @@
 from __future__ import annotations
 
 
+FLOATING_PANEL_MARKERS = (
+    'class="wr-tool-dock"',
+    "class='wr-tool-dock'",
+)
+
+
+def is_floating_quick_tools_html(body) -> bool:
+    text = str(body or "")
+    return any(marker in text for marker in FLOATING_PANEL_MARKERS)
+
+
 def install() -> bool:
     try:
         import streamlit as st
@@ -11,15 +22,13 @@ def install() -> bool:
         return True
 
     original_markdown = st.markdown
-    css_injected = {"done": False}
 
     def markdown_without_floating_tools(body, *args, **kwargs):
-        if not css_injected["done"]:
-            original_markdown(
-                "<style>.wr-tool-dock{display:none!important;}</style>",
-                unsafe_allow_html=True,
-            )
-            css_injected["done"] = True
+        # The source renderer still builds the old right-side floating panel.
+        # Block that one HTML payload every rerun. Separate sidebar calls continue,
+        # so the left Quick Tools workspace selector remains fully functional.
+        if is_floating_quick_tools_html(body):
+            return None
         return original_markdown(body, *args, **kwargs)
 
     st.markdown = markdown_without_floating_tools
