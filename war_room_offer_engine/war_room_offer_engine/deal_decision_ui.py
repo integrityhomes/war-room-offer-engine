@@ -20,6 +20,15 @@ except ImportError:
             number, source_settings,
         )
 
+try:
+    import deal_vault_ui as vault
+except ImportError:
+    try:
+        from . import deal_vault_ui as vault
+    except ImportError:
+        from war_room_offer_engine import deal_vault_ui as vault
+
+
 SOURCE_OPTIONS = [
     "Zillow / On-Market", "MLS / Agent", "XLeads / Cold Text",
     "Off-Market Seller", "Facebook / Referral", "Other",
@@ -199,6 +208,9 @@ def _run(st, ui, media_files: list[Any]) -> None:
     st.session_state["decision_result"] = decision
     st.session_state["decision_engine_result"] = engine_result
     st.session_state["decision_last_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if st.session_state.get("deal_vault_auto_save", True):
+        vault.save_current(st, media_files=media_files, automatic=True)
+    st.session_state["deal_vault_force_live_refresh"] = False
 
 
 def _live_decision(st, ui) -> dict[str, Any]:
@@ -261,10 +273,14 @@ def _render_decision(st, decision: dict[str, Any]) -> None:
 def _reset(st) -> None:
     for key in RESET_KEYS:
         st.session_state.pop(key, None)
+    st.session_state.pop("deal_vault_loaded_record", None)
+    st.session_state.pop("deal_vault_loaded_without_api_pull", None)
 
 
 def render(st, ui, original_renderer: Callable, exit_mode_value: str = "Auto") -> None:
+    vault.apply_pending_snapshot(st)
     initialize(st)
+    vault.initialize(st)
     _install_log_fields(st, ui)
     st.header("Deal Decision Center")
     st.caption("Paste one address or listing link. The app pulls everything it can and gives one clear decision.")
@@ -291,6 +307,7 @@ def render(st, ui, original_renderer: Callable, exit_mode_value: str = "Auto") -
         t1.text_area("Negotiation Notes", height=90, key="decision_negotiation_notes")
         t2.text_area("Other Important Terms", height=90, key="decision_other_terms")
     media = st.file_uploader("Optional property photos or walkthrough video", type=["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v", "avi"], accept_multiple_files=True, key="decision_media")
+    vault.render_box(st, media_files=media or [])
     buttons = st.columns([3, 1])
     analyze = buttons[0].button("Pull Everything & Tell Me", type="primary", use_container_width=True)
     reset = buttons[1].button("Start New Property", type="secondary", use_container_width=True)
@@ -298,9 +315,16 @@ def render(st, ui, original_renderer: Callable, exit_mode_value: str = "Auto") -
         _reset(st)
         st.rerun()
     if analyze:
-        if not str(st.session_state.get("decision_property_input", "")).strip():
+        property_input = str(st.session_state.get("decision_property_input", "") or "").strip()
+        if not property_input:
             st.error("Enter a property address or listing link first.")
         else:
+            saved = vault.find_saved_before_pull(st, property_input)
+            if saved and vault.queue_record_load(st, saved):
+                st.session_state["deal_vault_last_status"] = (
+                    "Saved deal found and loaded before paid data sources were called. No property-data credits were used."
+                )
+                st.rerun()
             with st.spinner("Pulling property facts, RentCast rents and comps, sold comps, condition, and offer numbers..."):
                 _run(st, ui, media or [])
             st.success("Automatic analysis complete.")
