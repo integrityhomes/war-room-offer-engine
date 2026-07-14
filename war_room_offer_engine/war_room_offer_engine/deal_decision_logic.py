@@ -86,17 +86,52 @@ def review_flags(s: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(flags))
 
 
+def _list_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _normalized_data(s: dict[str, Any]) -> dict[str, Any]:
+    normalized = s.get("one_load_normalized", {}) or {}
+    data = normalized.get("data", {}) if isinstance(normalized, dict) else {}
+    return data if isinstance(data, dict) else {}
+
+
+def rent_comp_count(s: dict[str, Any]) -> int:
+    data = _normalized_data(s)
+    return max(
+        int(number(s.get("rentcast_rent_comp_count"))),
+        int(number(s.get("rentcast_comp_count"))),
+        int(number(s.get("rent_comp_count"))),
+        int(number(s.get("manual_rent_comp_count"))),
+        int(number(data.get("rent_comp_count"))),
+        _list_count(s.get("rentcast_rent_comps")),
+        _list_count(s.get("rent_comps")),
+        _list_count(data.get("rent_comps")),
+    )
+
+
 def rent_verified(s: dict[str, Any]) -> bool:
-    count = max(int(number(s.get("rentcast_rent_comp_count"))), int(number(s.get("manual_rent_comp_count"))))
-    confidence = str(s.get("rent_confidence", "")).lower()
-    return number(s.get("rent")) > 0 and str(s.get("rent_verification_needed", "Yes")) != "Yes" and (
-        count >= 3 or "strong" in confidence or "medium" in confidence
+    count = rent_comp_count(s)
+    confidence = str(s.get("rent_confidence", "") or _normalized_data(s).get("rent_confidence", "")).lower()
+    has_verified_comps = count >= 3 or "strong" in confidence or "medium" in confidence
+    # A stale verification flag must not override actual RentCast comps returned in
+    # the same run. Three or more comparable rentals are treated as verified.
+    verification_needed = str(s.get("rent_verification_needed", "Yes"))
+    return number(s.get("rent") or _normalized_data(s).get("rent")) > 0 and has_verified_comps and (
+        verification_needed != "Yes" or count >= 3
     )
 
 
 def sold_count(s: dict[str, Any]) -> int:
+    data = _normalized_data(s)
     return max(
-        int(number(s.get("rentcast_value_comp_count"))), int(number(s.get("auto_comp_count"))),
+        int(number(s.get("rentcast_value_comp_count"))),
+        int(number(s.get("rentcast_sold_comp_count"))),
+        int(number(s.get("auto_comp_count"))),
+        int(number(data.get("rentcast_sold_comp_count"))),
+        _list_count(s.get("rentcast_sold_comps")),
+        _list_count(s.get("auto_sold_comps")),
+        _list_count(data.get("rentcast_sold_comps")),
         int(number(s.get("strong_comp_count"))) + int(number(s.get("good_comp_count"))),
     )
 
