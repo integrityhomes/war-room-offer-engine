@@ -77,6 +77,7 @@ RESET_KEYS = [
     "deal_library_assigned_to", "deal_library_updated_by", "deal_library_team_notes",
     "deal_library_last_saved_at", "deal_library_loaded_without_api",
     "deal_library_last_message", "deal_library_last_error", "deal_library_force_refresh",
+    "deal_library_force_refresh_reset_pending",
 ]
 
 
@@ -313,6 +314,8 @@ def render(st, ui, original_renderer: Callable, exit_mode_value: str = "Auto") -
     apply_pending_restore(st)
     load_query_deal_if_requested(st)
     initialize(st)
+    if st.session_state.pop("deal_library_force_refresh_reset_pending", False):
+        st.session_state["deal_library_force_refresh"] = False
     st.session_state.setdefault("deal_library_force_refresh", False)
     _install_log_fields(st, ui)
     st.header("Deal Decision Center")
@@ -361,7 +364,7 @@ def render(st, ui, original_renderer: Callable, exit_mode_value: str = "Auto") -
                 open_saved_before_paid_pull(st)
             with st.spinner("Pulling property facts, RentCast rents and comps, sold comps, condition, and offer numbers..."):
                 _run(st, ui, media or [])
-            st.session_state["deal_library_force_refresh"] = False
+            st.session_state["deal_library_force_refresh_reset_pending"] = True
             st.success("Automatic analysis complete.")
     _render_decision(st, _live_decision(st, ui))
     render_deal_library_box(st)
