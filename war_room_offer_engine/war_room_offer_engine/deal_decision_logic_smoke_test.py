@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from deal_decision_logic import AUTO, SLOW_KEEP, SLOW_WHOLESALE, build_decision, evaluate
+from deal_decision_logic import AUTO, SLOW_KEEP, SLOW_WHOLESALE, build_decision, evaluate, rent_comp_count, rent_verified
 
 
 ASSUMPTIONS = {
@@ -62,4 +62,34 @@ assert build_decision(above_max, ASSUMPTIONS, ENGINE, AUTO)["decision"] == "DO N
 missing_rent = dict(STATE, rent=0, rentcast_rent_comp_count=0, rent_verification_needed="Yes")
 assert build_decision(missing_rent, ASSUMPTIONS, ENGINE, AUTO)["decision"] == "HUMAN REVIEW"
 
-print("Deal Decision Center Marion smoke test passed.")
+# Regression: PR #52 originally stored this key as rentcast_comp_count while
+# the Decision Center checked rentcast_rent_comp_count. Four real comps must
+# verify the rent even when an older stale flag still says verification is needed.
+alias_state = dict(STATE)
+alias_state.pop("rentcast_rent_comp_count")
+alias_state["rentcast_comp_count"] = 4
+alias_state["rent_verification_needed"] = "Yes"
+alias_state["rent_confidence"] = "Medium fallback comps"
+assert rent_comp_count(alias_state) == 4
+assert rent_verified(alias_state)
+assert build_decision(alias_state, ASSUMPTIONS, ENGINE, AUTO)["decision"] == "BUY"
+
+# The comparable list embedded in normalized One-Load data must also count.
+normalized_state = dict(STATE)
+normalized_state.pop("rentcast_rent_comp_count")
+normalized_state["rent_verification_needed"] = "Yes"
+normalized_state["rent_confidence"] = "Medium fallback comps"
+normalized_state["one_load_normalized"] = {
+    "data": {
+        "rent_comps": [
+            {"rent": 1300},
+            {"rent": 750},
+            {"rent": 1350},
+            {"rent": 1100},
+        ]
+    }
+}
+assert rent_comp_count(normalized_state) == 4
+assert rent_verified(normalized_state)
+
+print("Deal Decision Center Marion and RentCast comp verification smoke test passed.")
