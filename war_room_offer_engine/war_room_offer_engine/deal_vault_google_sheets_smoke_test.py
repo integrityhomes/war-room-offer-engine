@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from deal_vault_google_sheets import (
     HISTORY_HEADERS,
     HISTORY_TAB,
@@ -27,7 +29,9 @@ class MemoryVault(DealVaultSheets):
 
     def _update_values(self, range_name, rows):
         assert VAULT_TAB in range_name
-        row_number = int(range_name.split("A")[-1].split(":")[0])
+        match = re.search(r"!A(\d+):", range_name)
+        assert match, range_name
+        row_number = int(match.group(1))
         self.records[row_number - 2] = dict(zip(VAULT_HEADERS, rows[0]))
 
     def _append_values(self, range_name, rows):
