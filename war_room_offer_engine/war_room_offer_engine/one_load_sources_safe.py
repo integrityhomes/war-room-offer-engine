@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 try:
-    import hide_floating_quick_tools  # noqa: F401 - keep sidebar navigation, remove right-side floating panel
-except ImportError:
-    try:
-        from . import hide_floating_quick_tools  # noqa: F401
-    except ImportError:
-        from war_room_offer_engine import hide_floating_quick_tools  # noqa: F401
-
-try:
     import single_section_workspace  # noqa: F401 - show one selected War Room section at a time
 except ImportError:
     try:
         from . import single_section_workspace  # noqa: F401
     except ImportError:
         from war_room_offer_engine import single_section_workspace  # noqa: F401
+
+try:
+    import hide_floating_quick_tools  # noqa: F401 - apply last so the right-side floating panel stays hidden
+except ImportError:
+    try:
+        from . import hide_floating_quick_tools  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import hide_floating_quick_tools  # noqa: F401
 
 try:
     import one_load_sources as base
