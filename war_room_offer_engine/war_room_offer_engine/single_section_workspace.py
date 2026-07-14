@@ -56,12 +56,12 @@ def _hidden_return(function_name: str, st):
 
 def _render_simple_one_load(st, ui, original, exit_mode: str = "Auto"):
     try:
-        from simple_operator_ui_v2 import render_simple_operator_section
+        from simple_operator_ui_final import render_simple_operator_section
     except ImportError:
         try:
-            from .simple_operator_ui_v2 import render_simple_operator_section
+            from .simple_operator_ui_final import render_simple_operator_section
         except ImportError:
-            from war_room_offer_engine.simple_operator_ui_v2 import render_simple_operator_section
+            from war_room_offer_engine.simple_operator_ui_final import render_simple_operator_section
     return render_simple_operator_section(st, ui, original, exit_mode=exit_mode)
 
 
