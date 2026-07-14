@@ -17,6 +17,14 @@ except ImportError:
         from war_room_offer_engine import single_section_workspace  # noqa: F401
 
 try:
+    import rentcast_state_bootstrap  # noqa: F401 - hydrate RentCast rent and sold comps into workspace state
+except ImportError:
+    try:
+        from . import rentcast_state_bootstrap  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_state_bootstrap  # noqa: F401
+
+try:
     import one_load_sources as base
     import zillow_url_import_safe as zillow_safe
     from data_sources import get_secret
@@ -58,8 +66,6 @@ def pull_zillow_listing_with_rentcast(listing_url: str, address: str = "", limit
     return result
 
 
-# Patch the exact module object used by One-Load, so the existing analyzer receives
-# RentCast rent, rent comparables, value, and sold comparables during the same Zillow run.
 zillow_safe.pull_zillow_listing = pull_zillow_listing_with_rentcast
 base.pull_zillow_listing = pull_zillow_listing_with_rentcast
 
