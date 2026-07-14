@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -16,12 +17,30 @@ except Exception:  # pragma: no cover - configuration screen handles missing pac
     service_account = None
 
 try:
-    from deal_vault_snapshot import changed_fields, decode_snapshot, encode_snapshot, snapshot_hash
+    from deal_vault_snapshot import (
+        changed_fields,
+        decode_snapshot,
+        encode_snapshot,
+        normalize_address_key,
+        snapshot_hash,
+    )
 except ImportError:
     try:
-        from .deal_vault_snapshot import changed_fields, decode_snapshot, encode_snapshot, snapshot_hash
+        from .deal_vault_snapshot import (
+            changed_fields,
+            decode_snapshot,
+            encode_snapshot,
+            normalize_address_key,
+            snapshot_hash,
+        )
     except ImportError:
-        from war_room_offer_engine.deal_vault_snapshot import changed_fields, decode_snapshot, encode_snapshot, snapshot_hash
+        from war_room_offer_engine.deal_vault_snapshot import (
+            changed_fields,
+            decode_snapshot,
+            encode_snapshot,
+            normalize_address_key,
+            snapshot_hash,
+        )
 
 
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
@@ -64,16 +83,37 @@ def parse_sheet_id(value: Any) -> str:
     return match.group(1) if match else text
 
 
+def _plain_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return {str(key): item for key, item in value.items()}
+    try:
+        return {str(key): value[key] for key in value.keys()}
+    except Exception:
+        return {}
+
+
+def _normalize_service_account(info: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = {str(key): value for key, value in info.items()}
+    private_key = str(normalized.get("private_key", "") or "")
+    if "\\n" in private_key:
+        normalized["private_key"] = private_key.replace("\\n", "\n")
+    normalized.setdefault("token_uri", "https://oauth2.googleapis.com/token")
+    return normalized
+
+
 def service_account_info(secrets: Any) -> dict[str, Any]:
-    nested = _secret_value(secrets, "gcp_service_account", {})
-    if isinstance(nested, dict) and nested.get("client_email"):
-        return dict(nested)
+    nested = _plain_mapping(_secret_value(secrets, "gcp_service_account", {}))
+    if nested.get("client_email"):
+        return _normalize_service_account(nested)
     raw = _secret_value(secrets, "GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    if isinstance(raw, dict):
-        return dict(raw)
+    raw_mapping = _plain_mapping(raw)
+    if raw_mapping:
+        return _normalize_service_account(raw_mapping)
     if str(raw or "").strip():
         try:
-            return json.loads(str(raw))
+            parsed = json.loads(str(raw))
+            if isinstance(parsed, Mapping):
+                return _normalize_service_account(parsed)
         except Exception:
             return {}
     return {}
@@ -237,7 +277,7 @@ class DealVaultSheets:
         return records
 
     def find(self, query: str, records: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
-        normalized = re.sub(r"[^a-z0-9]+", " ", str(query or "").lower()).strip()
+        normalized = normalize_address_key(query)
         if not normalized:
             return None
         rows = records if records is not None else self.list_deals()
@@ -247,7 +287,7 @@ class DealVaultSheets:
                 record.get("address", ""), record.get("listing_url", ""),
             ]
             for candidate in candidates:
-                candidate_normalized = re.sub(r"[^a-z0-9]+", " ", str(candidate or "").lower()).strip()
+                candidate_normalized = normalize_address_key(candidate)
                 if candidate_normalized and (
                     normalized == candidate_normalized
                     or normalized in candidate_normalized
