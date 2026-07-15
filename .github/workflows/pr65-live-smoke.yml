@@ -14,7 +14,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
 
     steps:
       - name: Check out production main
@@ -98,8 +98,8 @@ jobs:
           url = "https://war-room-offer-engine.streamlit.app"
           expected = [
               "Deal Decision Center",
-              "Pull Everything & Tell Me",
               "Property address or listing link",
+              "Negotiation Center",
           ]
           fatal_markers = [
               "traceback (most recent call last)",
@@ -109,37 +109,44 @@ jobs:
           ]
           attempts = []
           success = False
-          final_body = ""
+          combined_text = ""
 
           with sync_playwright() as p:
               browser = p.chromium.launch(headless=True)
               page = browser.new_page(viewport={"width": 1440, "height": 1100})
               page.goto(url, wait_until="domcontentloaded", timeout=180_000)
 
-              for attempt in range(18):
+              for attempt in range(6):
                   page.wait_for_timeout(10_000 if attempt else 15_000)
-                  final_body = page.locator("body").inner_text(timeout=30_000)
-                  attempts.append(f"\n===== ATTEMPT {attempt + 1} =====\n{final_body[:12000]}")
-                  lowered = final_body.lower()
+                  frame_sections = []
+                  for frame_index, frame in enumerate(page.frames):
+                      try:
+                          text = frame.locator("body").inner_text(timeout=15_000)
+                      except Exception as exc:
+                          text = f"[frame text unavailable: {exc}]"
+                      frame_sections.append(f"FRAME {frame_index} {frame.url}\n{text[:12000]}")
+                  combined_text = "\n\n".join(frame_sections)
+                  attempts.append(f"\n===== ATTEMPT {attempt + 1} =====\n{combined_text}")
+                  lowered = combined_text.lower()
                   if any(marker in lowered for marker in fatal_markers):
                       break
-                  if all(text in final_body for text in expected):
+                  if all(text in combined_text for text in expected):
                       success = True
                       break
-                  if attempt in {5, 11}:
+                  if attempt == 2:
                       page.reload(wait_until="domcontentloaded", timeout=180_000)
 
               Path("browser-output.txt").write_text("\n".join(attempts), encoding="utf-8")
               page.screenshot(path="pr65-live-smoke.png", full_page=True)
               browser.close()
 
-          print(final_body[:12000])
-          lowered = final_body.lower()
+          print(combined_text[:20000])
+          lowered = combined_text.lower()
           for marker in fatal_markers:
               if marker in lowered:
                   raise AssertionError(f"Live app displayed fatal marker: {marker}")
           if not success:
-              missing = [text for text in expected if text not in final_body]
+              missing = [text for text in expected if text not in combined_text]
               raise AssertionError(f"Live app did not render expected production controls after retries: {missing}")
           PY
 
