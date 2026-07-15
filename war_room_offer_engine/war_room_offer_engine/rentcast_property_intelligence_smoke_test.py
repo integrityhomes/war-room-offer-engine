@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
 
+
+os.environ["RENTCAST_INTELLIGENCE_PREVIEW"] = "1"
 
 APP_DIR = Path(__file__).resolve().parent
 for path in [str(APP_DIR), str(APP_DIR.parent), str(APP_DIR.parent.parent)]:
@@ -12,7 +15,9 @@ for path in [str(APP_DIR), str(APP_DIR.parent), str(APP_DIR.parent.parent)]:
         sys.path.insert(0, path)
 
 
+preview = importlib.import_module("rentcast_intelligence_preview")
 module = importlib.import_module("rentcast_property_intelligence")
+preview.install_dispatch_gate(module)
 module._RESPONSE_CACHE.clear()
 module._RESULT_CACHE.clear()
 
@@ -226,6 +231,26 @@ assert second["arv"] == result["arv"]
 assert second["rent"] == result["rent"]
 assert len(session.calls) == before
 
+# The actual One-Load path goes through the routed RentCast function and marks
+# the result so operators and saved audit data can identify preview evidence.
+import rentcast_auto_enrichment as rentcast_module
+routed = rentcast_module.enrich_property_with_rentcast(subject, "test-key", session=session)
+assert routed[preview.PREVIEW_ACTIVE_KEY] is True
+assert routed["arv"] == result["arv"]
+assert len(session.calls) == before
+
+# PR #67 is off by default. The installed dispatch gate must route back to the
+# current production engine and avoid property-record or rural-listing searches.
+os.environ.pop("RENTCAST_INTELLIGENCE_PREVIEW", None)
+module._RESPONSE_CACHE.clear()
+module._RESULT_CACHE.clear()
+baseline_session = FakeSession()
+baseline = rentcast_module.enrich_property_with_rentcast(subject, "test-key", session=baseline_session)
+assert preview.PREVIEW_ACTIVE_KEY not in baseline
+assert not any(endpoint.endswith("/properties") for endpoint, _ in baseline_session.calls)
+assert not any(endpoint.endswith("/listings/rental/long-term") for endpoint, _ in baseline_session.calls)
+os.environ["RENTCAST_INTELLIGENCE_PREVIEW"] = "1"
+
 
 # Decision guards use verified-quality counts rather than treating any three distant rows as proof.
 import deal_decision_logic as decision_logic
@@ -254,5 +279,17 @@ assert decision_logic.sold_count(listing_only_state) == 0
 assert "verified ARV / recorded sold comps" in decision_logic.missing_items(
     listing_only_state, decision_logic.WHOLESALE_OFF_MARKET
 )
+
+# With preview off, the global wrappers return to the existing production rules.
+os.environ.pop("RENTCAST_INTELLIGENCE_PREVIEW", None)
+baseline_decision_state = {
+    "address": "100 County Rd, Rural, VA 24354",
+    "rent": 1100,
+    "rentcast_rent_comp_count": 3,
+    "rent_confidence": "Strong verified rent comps",
+    "rent_verification_needed": "No",
+}
+assert decision_logic.rent_verified(baseline_decision_state) is True
+os.environ["RENTCAST_INTELLIGENCE_PREVIEW"] = "1"
 
 print("RentCast recorded-sale, rural ARV, rural rent and request-cache smoke test passed.")
