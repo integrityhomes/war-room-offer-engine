@@ -59,9 +59,9 @@ class FakeRequests:
                 {
                     "price": 35667,
                     "comparables": [
-                        {"formattedAddress": "Sale 1", "price": 34000, "lastSaleDate": "2026-01-15", "bedrooms": 2, "bathrooms": 1, "squareFootage": 900},
-                        {"formattedAddress": "Sale 2", "price": 37000, "lastSaleDate": "2026-02-15", "bedrooms": 2, "bathrooms": 1, "squareFootage": 875},
-                        {"formattedAddress": "Sale 3", "price": 36000, "lastSaleDate": "2026-03-15", "bedrooms": 2, "bathrooms": 1, "squareFootage": 925},
+                        {"formattedAddress": "Sale 1", "price": 34000, "lastSaleDate": "2026-01-15", "bedrooms": 2, "bathrooms": 1, "squareFootage": 900, "distance": 0.3},
+                        {"formattedAddress": "Sale 2", "price": 37000, "lastSaleDate": "2026-02-15", "bedrooms": 2, "bathrooms": 1, "squareFootage": 875, "distance": 0.7},
+                        {"formattedAddress": "Sale 3", "price": 36000, "lastSaleDate": "2026-03-15", "bedrooms": 2, "bathrooms": 1, "squareFootage": 925, "distance": 0.9},
                     ],
                 },
             )
@@ -94,6 +94,11 @@ assert result["rentcast_lookup_retry_used"] is True
 assert result["rentcast_submitted_address"] == "1115 Matson Dr, Marion, VA 24354"
 assert result["rentcast_arv"] == 35667
 assert result["rentcast_sold_comp_count"] == 3
+assert result["auto_comp_count"] == 3
+assert result["auto_recommended_arv"] == 35667
+assert result["arv"] == 35667
+assert result["arv_source"] == "Automatic Sold Comps"
+assert result["arv_confidence"] == "Strong"
 assert result["beds"] == 2
 assert result["baths"] == 1
 assert result["sqft"] == 900
@@ -105,7 +110,12 @@ assert state["rentcast_comp_count"] == 4
 assert state["rent_verification_needed"] == "No"
 assert state["rentcast_value_comp_count"] == 3
 assert state["auto_comp_count"] == 3
+assert state["auto_recommended_arv"] == 35667
+assert state["arv"] == 35667
+assert state["arv_source_used"] == "Automatic Sold Comps"
+assert state["value_source"] == "Automatic Sold Comps"
 assert state["rentcast_arv"] == 35667
+assert all(comp.get("score") for comp in state["auto_sold_comps"])
 
 constrained_rent_calls = [params for url, params in fake_requests.calls if url.endswith("/v1/avm/rent/long-term") and "bedrooms" in params]
 retry_rent_calls = [params for url, params in fake_requests.calls if url.endswith("/v1/avm/rent/long-term") and "bedrooms" not in params]
@@ -115,4 +125,4 @@ assert constrained_rent_calls[0]["bedrooms"] == 2
 assert constrained_rent_calls[0]["squareFootage"] == 900
 assert retry_rent_calls[0]["address"] == "1115 Matson Dr, Marion, VA 24354"
 
-print("Plain-address RentCast enrichment smoke test passed.")
+print("Plain-address RentCast enrichment and automatic sold-comp ARV smoke test passed.")

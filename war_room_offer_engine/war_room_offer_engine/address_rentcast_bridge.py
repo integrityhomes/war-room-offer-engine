@@ -64,11 +64,12 @@ def _property_facts(address: str, api_key: str) -> tuple[dict[str, Any], str]:
     }, ""
 
 
-def _enrichment_score(data: dict[str, Any]) -> tuple[int, int, int, int]:
+def _enrichment_score(data: dict[str, Any]) -> tuple[int, int, int, int, int]:
     return (
         _usable_count(data.get("rent_comps")),
         1 if _number(data.get("rent") or data.get("rent_estimate")) > 0 else 0,
-        _usable_count(data.get("rentcast_sold_comps")),
+        _usable_count(data.get("auto_sold_comps") or data.get("rentcast_sold_comps")),
+        1 if _number(data.get("auto_recommended_arv")) > 0 else 0,
         1 if _number(data.get("rentcast_arv") or data.get("arv")) > 0 else 0,
     )
 
@@ -79,6 +80,7 @@ def _run_enrichment(address: str, api_key: str, facts: dict[str, Any]) -> tuple[
         "beds": facts.get("beds", 0),
         "baths": facts.get("baths", 0),
         "sqft": facts.get("sqft", 0),
+        "property_type": facts.get("property_type", ""),
     }
     first = enrich_property_with_rentcast(subject, api_key, session=ds.requests)
     first_rent_comps = _usable_count(first.get("rent_comps"))
@@ -95,6 +97,41 @@ def _run_enrichment(address: str, api_key: str, facts: dict[str, Any]) -> tuple[
         session=ds.requests,
     )
     return (retry, True) if _enrichment_score(retry) > _enrichment_score(first) else (first, False)
+
+
+def _hydrate_auto_arv_state(st, result: dict[str, Any]) -> None:
+    scored = result.get("auto_sold_comps", []) or []
+    summary = result.get("auto_arv_summary", {}) or {}
+    auto_arv = _number(result.get("auto_recommended_arv") or summary.get("recommended_arv"))
+
+    if not scored and result.get("rentcast_sold_comps"):
+        scored = result.get("rentcast_sold_comps", []) or []
+
+    st.session_state["auto_sold_comps"] = scored
+    st.session_state["auto_comp_count"] = len(scored)
+    st.session_state["auto_comp_source"] = "RentCast"
+    st.session_state["auto_arv_summary"] = summary
+    st.session_state["auto_recommended_arv"] = int(auto_arv) if auto_arv > 0 else 0
+    st.session_state["auto_low_arv"] = int(_number(summary.get("low_arv")))
+    st.session_state["auto_conservative_arv"] = int(_number(summary.get("conservative_arv")))
+    st.session_state["auto_average_arv"] = int(_number(summary.get("average_arv")))
+    st.session_state["auto_high_arv"] = int(_number(summary.get("high_arv")))
+    st.session_state["strong_comp_count"] = int(summary.get("strong_comp_count", 0) or 0)
+    st.session_state["good_comp_count"] = int(summary.get("good_comp_count", 0) or 0)
+    st.session_state["weak_comp_count"] = int(summary.get("weak_comp_count", 0) or 0)
+    st.session_state["excluded_comp_count"] = int(summary.get("excluded_comp_count", 0) or 0)
+    st.session_state["auto_comp_radius"] = result.get("auto_comp_radius") or summary.get("search_radius") or "1 mile"
+    st.session_state["auto_comp_date_range"] = result.get("auto_comp_date_range") or summary.get("date_range") or "Last 12 months"
+
+    if scored:
+        st.session_state["auto_comp_messages"] = [
+            f"Automatically scored {len(scored)} RentCast sold comparable(s)."
+        ]
+    if auto_arv > 0:
+        st.session_state["arv"] = int(auto_arv)
+        st.session_state["arv_source_used"] = "Automatic Sold Comps"
+        st.session_state["value_source"] = "Automatic Sold Comps"
+        st.session_state["arv_confidence"] = summary.get("arv_confidence", "Weak")
 
 
 def _hydrate_state(result: dict[str, Any]) -> None:
@@ -117,6 +154,9 @@ def _hydrate_state(result: dict[str, Any]) -> None:
     st.session_state["rentcast_rent_error"] = result.get("rentcast_rent_error", "")
     st.session_state["rentcast_lookup_retry_used"] = result.get("rentcast_lookup_retry_used", False)
 
+    if result.get("rent"):
+        st.session_state["rent"] = int(_number(result.get("rent")))
+        st.session_state["rent_source"] = "RentCast"
     if rent_count >= 3:
         st.session_state["rent_verification_needed"] = "No"
         st.session_state["rent_confidence"] = "Strong verified rent comps"
@@ -129,14 +169,15 @@ def _hydrate_state(result: dict[str, Any]) -> None:
     st.session_state["rentcast_sold_comp_count"] = sold_count
     st.session_state["rentcast_value_comp_count"] = sold_count
     st.session_state["rentcast_value_error"] = result.get("rentcast_value_error", "")
-    if sold:
-        st.session_state["auto_sold_comps"] = sold
-        st.session_state["auto_comp_count"] = sold_count
-        st.session_state["auto_comp_source"] = "RentCast"
-        st.session_state["auto_comp_messages"] = [f"Automatically loaded {sold_count} RentCast sold comparable(s)."]
     if result.get("rentcast_arv"):
         st.session_state["rentcast_arv"] = int(_number(result.get("rentcast_arv")))
+
+    _hydrate_auto_arv_state(st, result)
+
+    if not st.session_state.get("auto_recommended_arv") and result.get("rentcast_arv"):
+        st.session_state["arv"] = int(_number(result.get("rentcast_arv")))
         st.session_state["arv_source_used"] = result.get("arv_source", "RentCast AVM")
+        st.session_state["value_source"] = result.get("arv_source", "RentCast AVM")
         st.session_state["arv_confidence"] = result.get("arv_confidence", "AVM only")
 
 
@@ -159,6 +200,9 @@ def lookup_rentcast_with_full_enrichment(
             "rent_comp_count": 0,
             "rentcast_sold_comps": [],
             "rentcast_sold_comp_count": 0,
+            "auto_sold_comps": [],
+            "auto_arv_summary": {},
+            "auto_recommended_arv": 0,
             "rentcast_submitted_address": submitted_address,
             "rentcast_rent_error": "Missing RentCast API key.",
             "notes": "Missing RentCast API key.",
@@ -174,12 +218,15 @@ def lookup_rentcast_with_full_enrichment(
     enriched, retry_used = _run_enrichment(submitted_address, api_key, facts)
     rent_comps = enriched.get("rent_comps", []) or []
     sold_comps = enriched.get("rentcast_sold_comps", []) or []
+    scored_comps = enriched.get("auto_sold_comps", []) or []
+    auto_summary = enriched.get("auto_arv_summary", {}) or {}
     rent = _number(enriched.get("rent") or enriched.get("rent_estimate"))
-    arv = _number(enriched.get("rentcast_arv") or enriched.get("arv"))
+    rentcast_avm = _number(enriched.get("rentcast_arv"))
+    resolved_arv = _number(enriched.get("arv") or enriched.get("auto_recommended_arv") or rentcast_avm)
 
     result = {
         "source": "RentCast",
-        "found": bool(rent or arv or rent_comps or sold_comps or any(facts.values())),
+        "found": bool(rent or resolved_arv or rent_comps or sold_comps or any(facts.values())),
         "rent": rent,
         "rent_source": "RentCast" if rent else "Missing / RentCast unavailable",
         "rent_confidence": "Strong verified rent comps" if len(rent_comps) >= 3 else "Medium fallback comps" if rent else "Weak",
@@ -192,12 +239,26 @@ def lookup_rentcast_with_full_enrichment(
         "rentcast_submitted_address": enriched.get("rentcast_submitted_address") or submitted_address,
         "rentcast_rent_error": enriched.get("rentcast_rent_error", ""),
         "rentcast_lookup_retry_used": retry_used,
-        "rentcast_arv": arv,
-        "arv": arv,
-        "arv_source": enriched.get("arv_source", "RentCast sold comps" if len(sold_comps) >= 3 else "RentCast AVM only" if arv else ""),
-        "arv_confidence": enriched.get("arv_confidence", "Strong" if len(sold_comps) >= 3 else "AVM only" if arv else "Not enough data"),
+        "rentcast_arv": rentcast_avm,
+        "arv": resolved_arv,
+        "arv_source": enriched.get("arv_source", "Automatic Sold Comps" if _number(enriched.get("auto_recommended_arv")) else "RentCast AVM only" if rentcast_avm else ""),
+        "arv_confidence": enriched.get("arv_confidence", auto_summary.get("arv_confidence", "AVM only" if rentcast_avm else "Not enough data")),
         "rentcast_sold_comps": sold_comps,
         "rentcast_sold_comp_count": len(sold_comps),
+        "auto_sold_comps": scored_comps,
+        "auto_comp_count": len(scored_comps),
+        "auto_arv_summary": auto_summary,
+        "auto_recommended_arv": enriched.get("auto_recommended_arv", 0),
+        "auto_low_arv": enriched.get("auto_low_arv", 0),
+        "auto_conservative_arv": enriched.get("auto_conservative_arv", 0),
+        "auto_average_arv": enriched.get("auto_average_arv", 0),
+        "auto_high_arv": enriched.get("auto_high_arv", 0),
+        "strong_comp_count": enriched.get("strong_comp_count", 0),
+        "good_comp_count": enriched.get("good_comp_count", 0),
+        "weak_comp_count": enriched.get("weak_comp_count", 0),
+        "excluded_comp_count": enriched.get("excluded_comp_count", 0),
+        "auto_comp_radius": enriched.get("auto_comp_radius", auto_summary.get("search_radius", "1 mile")),
+        "auto_comp_date_range": enriched.get("auto_comp_date_range", auto_summary.get("date_range", "Last 12 months")),
         "rentcast_value_error": enriched.get("rentcast_value_error", ""),
         "beds": facts.get("beds", 0),
         "baths": facts.get("baths", 0),
@@ -212,8 +273,10 @@ def lookup_rentcast_with_full_enrichment(
         note_parts.append("Address-only retry used")
     note_parts.append(f"Rent: {int(rent) if rent else 0}")
     note_parts.append(f"Rental comps: {len(rent_comps)}")
-    note_parts.append(f"Value: {int(arv) if arv else 0}")
-    note_parts.append(f"Sold comps: {len(sold_comps)}")
+    note_parts.append(f"RentCast AVM: {int(rentcast_avm) if rentcast_avm else 0}")
+    note_parts.append(f"Sold comps returned: {len(sold_comps)}")
+    note_parts.append(f"Sold comps scored: {len(scored_comps)}")
+    note_parts.append(f"Automatic ARV: {int(_number(result.get('auto_recommended_arv'))) if result.get('auto_recommended_arv') else 0}")
     for error in [property_error, result.get("rentcast_rent_error"), result.get("rentcast_value_error")]:
         if error:
             note_parts.append(str(error))

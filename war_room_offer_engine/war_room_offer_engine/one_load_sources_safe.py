@@ -17,7 +17,15 @@ except ImportError:
         from war_room_offer_engine import single_section_workspace  # noqa: F401
 
 try:
-    import rentcast_state_bootstrap  # noqa: F401 - hydrate RentCast rent and sold comps into workspace state
+    import address_rentcast_bridge  # noqa: F401 - make plain addresses use the same full RentCast enrichment as listing URLs
+except ImportError:
+    try:
+        from . import address_rentcast_bridge  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import address_rentcast_bridge  # noqa: F401
+
+try:
+    import rentcast_state_bootstrap  # noqa: F401 - hydrate RentCast rent, scored sold comps and automatic ARV into workspace state
 except ImportError:
     try:
         from . import rentcast_state_bootstrap  # noqa: F401
