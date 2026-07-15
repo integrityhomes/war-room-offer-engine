@@ -42,9 +42,12 @@ class FakeSession:
             {
                 "price": 35667,
                 "comparables": [
-                    {"formattedAddress": "Sold 1", "price": 35000, "saleDate": "2026-01-01", "bedrooms": 2, "bathrooms": 1, "squareFootage": 900},
-                    {"formattedAddress": "Sold 2", "price": 37000, "saleDate": "2026-02-01", "bedrooms": 2, "bathrooms": 1, "squareFootage": 850},
-                    {"formattedAddress": "Sold 3", "price": 35500, "saleDate": "2026-03-01", "bedrooms": 2, "bathrooms": 1, "squareFootage": 900},
+                    # RentCast occasionally includes the subject in the returned set.
+                    # It must never be used to calculate its own ARV.
+                    {"formattedAddress": "1115 Matson Drive, Marion, VA 24354", "price": 25000, "saleDate": "2026-04-01", "bedrooms": 2, "bathrooms": 1, "squareFootage": 900, "distance": 0},
+                    {"formattedAddress": "Sold 1", "price": 35000, "saleDate": "2026-01-01", "bedrooms": 2, "bathrooms": 1, "squareFootage": 900, "distance": 0.3},
+                    {"formattedAddress": "Sold 2", "price": 37000, "saleDate": "2026-02-01", "bedrooms": 2, "bathrooms": 1, "squareFootage": 850, "distance": 0.8},
+                    {"formattedAddress": "Sold 3", "price": 35500, "saleDate": "2026-03-01", "bedrooms": 2, "bathrooms": 1, "squareFootage": 900, "distance": 1.2},
                 ],
             }
         )
@@ -68,8 +71,16 @@ assert result["rent_comp_average"] == 1125
 assert result["rent_comp_median"] == 1200
 assert result["rent_confidence"] == "Strong verified rent comps"
 assert result["rentcast_arv"] == 35667
-assert result["rentcast_sold_comp_count"] == 3
-assert result["arv_source"] == "RentCast sold comps"
+assert result["rentcast_sold_comp_count"] == 4
+assert result["auto_comp_count"] == 3
+assert all("1115 Matson" not in comp["comp_address"] for comp in result["auto_sold_comps"])
+assert result["auto_arv_summary"]["subject_comp_removed_count"] == 1
+assert result["auto_arv_summary"]["included_comp_count"] == 3
+assert result["auto_recommended_arv"] == 35875
+assert result["arv"] == 35875
+assert result["arv_source"] == "Automatic Sold Comps"
 assert result["arv_confidence"] == "Strong"
+assert result["auto_comp_radius"] == "1 mile"
+assert result["auto_comp_date_range"] == "Last 12 months"
 
-print("RentCast automatic rent and ARV enrichment smoke test passed.")
+print("RentCast automatic rent, comp scoring, subject removal and ARV enrichment smoke test passed.")
