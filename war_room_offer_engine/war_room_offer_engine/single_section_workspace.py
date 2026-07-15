@@ -48,6 +48,25 @@ def active_section(st) -> str:
     return SECTION_NAMES.get(str(selected), "One-Load")
 
 
+def render_workspace_selector(st, original_radio) -> None:
+    """Render the section picker once per Streamlit rerun.
+
+    The picker used to depend on an old quick-link markdown row. Saved deals can
+    bypass that row, which made Rent and Comps / ARV impossible to reopen. The
+    title hook now calls this directly so navigation is always available.
+    """
+    if getattr(st, "_war_room_workspace_radio_rendered", False):
+        return
+    st._war_room_workspace_radio_rendered = True
+    st.session_state.setdefault("war_room_active_section", SECTION_OPTIONS[0])
+    original_radio(
+        "Open section",
+        SECTION_OPTIONS,
+        key="war_room_active_section",
+        label_visibility="collapsed",
+    )
+
+
 def _hidden_return(function_name: str, st):
     if function_name == "render_repair_section":
         return st.session_state.get("repair_media_files", []) or []
@@ -135,6 +154,7 @@ def install_workspace() -> bool:
         st._war_room_workspace_radio_rendered = False
         result = original_title(*args, **kwargs)
         install_renderer_router_from_caller(st)
+        render_workspace_selector(st, original_radio)
         return result
 
     def markdown_with_workspace(body, *args, **kwargs):
@@ -144,15 +164,7 @@ def install_workspace() -> bool:
             "One-Load", "Pull Data", "Protection", "Rent", "Buyer Demand",
             "Dispo", "Repairs", "Comps / ARV", "QA / Decision",
         }:
-            if not getattr(st, "_war_room_workspace_radio_rendered", False):
-                st._war_room_workspace_radio_rendered = True
-                st.session_state.setdefault("war_room_active_section", SECTION_OPTIONS[0])
-                original_radio(
-                    "Open section",
-                    SECTION_OPTIONS,
-                    key="war_room_active_section",
-                    label_visibility="collapsed",
-                )
+            render_workspace_selector(st, original_radio)
             return None
         return original_markdown(body, *args, **kwargs)
 
