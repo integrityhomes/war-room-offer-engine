@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - validation/pr65-live-smoke
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
