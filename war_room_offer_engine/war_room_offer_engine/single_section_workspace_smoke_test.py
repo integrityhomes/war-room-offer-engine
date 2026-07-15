@@ -37,6 +37,20 @@ check(workspace.active_section(fake_st) == "One-Load", "One-Load is the default 
 check(len(workspace.SECTION_OPTIONS) == 9, "all nine workspace tools are available")
 check(len(set(workspace.RENDER_SECTION_MAP.values())) == 8, "each primary renderer has one workspace section")
 
+selector_calls = []
+workspace.render_workspace_selector(
+    fake_st,
+    lambda label, options, **kwargs: selector_calls.append((label, list(options), kwargs)),
+)
+workspace.render_workspace_selector(
+    fake_st,
+    lambda label, options, **kwargs: selector_calls.append((label, list(options), kwargs)),
+)
+check(len(selector_calls) == 1, "section selector renders exactly once per rerun")
+check(selector_calls[0][0] == "Open section", "section selector has the expected label")
+check(selector_calls[0][1] == workspace.SECTION_OPTIONS, "section selector exposes all workspace sections")
+check(selector_calls[0][2].get("key") == "war_room_active_section", "section selector preserves its session key")
+
 calls: list[str] = []
 workspace._render_decision_center = lambda *args, **kwargs: calls.append("Deal Decision Center")
 namespace = {
