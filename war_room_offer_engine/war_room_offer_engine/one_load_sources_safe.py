@@ -107,6 +107,8 @@ base.pull_zillow_listing = pull_zillow_listing_with_rentcast
 
 def normalize_one_load_lead(payload):
     summary = _original_normalize_one_load_lead(payload)
+    if not preview_control.preview_enabled():
+        return summary
     record = payload.get("record", {}) if isinstance(payload, dict) and isinstance(payload.get("record", {}), dict) else {}
     data = summary.get("data", {}) if isinstance(summary, dict) else {}
     if record and isinstance(data, dict):
