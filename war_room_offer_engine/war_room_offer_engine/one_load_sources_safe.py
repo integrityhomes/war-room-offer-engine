@@ -33,6 +33,14 @@ except ImportError:
         from war_room_offer_engine import rentcast_state_bootstrap  # noqa: F401
 
 try:
+    import rentcast_comp_normalization_fix  # noqa: F401 - remove subject comps, support date-unverified value comps and hydrate rent statistics
+except ImportError:
+    try:
+        from . import rentcast_comp_normalization_fix  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_comp_normalization_fix  # noqa: F401
+
+try:
     import one_load_sources as base
     import zillow_url_import_safe as zillow_safe
     from data_sources import get_secret
