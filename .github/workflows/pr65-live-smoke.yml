@@ -14,7 +14,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Check out production main
@@ -92,43 +92,64 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          from pathlib import Path
           from playwright.sync_api import sync_playwright
 
           url = "https://war-room-offer-engine.streamlit.app"
+          expected = [
+              "Deal Decision Center",
+              "Pull Everything & Tell Me",
+              "Property address or listing link",
+          ]
+          fatal_markers = [
+              "traceback (most recent call last)",
+              "modulenotfounderror",
+              "this app has encountered an error",
+              "application error",
+          ]
+          attempts = []
+          success = False
+          final_body = ""
+
           with sync_playwright() as p:
               browser = p.chromium.launch(headless=True)
               page = browser.new_page(viewport={"width": 1440, "height": 1100})
               page.goto(url, wait_until="domcontentloaded", timeout=180_000)
-              page.wait_for_timeout(15_000)
-              body = page.locator("body").inner_text(timeout=30_000)
-              print(body[:8000])
-              lowered = body.lower()
-              fatal_markers = [
-                  "traceback (most recent call last)",
-                  "modulenotfounderror",
-                  "this app has encountered an error",
-                  "application error",
-              ]
-              for marker in fatal_markers:
-                  if marker in lowered:
-                      raise AssertionError(f"Live app displayed fatal marker: {marker}")
-              expected = [
-                  "Deal Decision Center",
-                  "Pull Everything & Tell Me",
-                  "Property address or listing link",
-              ]
-              missing = [text for text in expected if text not in body]
-              if missing:
-                  raise AssertionError(f"Live app did not render expected production controls: {missing}")
+
+              for attempt in range(18):
+                  page.wait_for_timeout(10_000 if attempt else 15_000)
+                  final_body = page.locator("body").inner_text(timeout=30_000)
+                  attempts.append(f"\n===== ATTEMPT {attempt + 1} =====\n{final_body[:12000]}")
+                  lowered = final_body.lower()
+                  if any(marker in lowered for marker in fatal_markers):
+                      break
+                  if all(text in final_body for text in expected):
+                      success = True
+                      break
+                  if attempt in {5, 11}:
+                      page.reload(wait_until="domcontentloaded", timeout=180_000)
+
+              Path("browser-output.txt").write_text("\n".join(attempts), encoding="utf-8")
               page.screenshot(path="pr65-live-smoke.png", full_page=True)
               browser.close()
+
+          print(final_body[:12000])
+          lowered = final_body.lower()
+          for marker in fatal_markers:
+              if marker in lowered:
+                  raise AssertionError(f"Live app displayed fatal marker: {marker}")
+          if not success:
+              missing = [text for text in expected if text not in final_body]
+              raise AssertionError(f"Live app did not render expected production controls after retries: {missing}")
           PY
 
-      - name: Upload live validation screenshot
+      - name: Upload live validation diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pr65-live-smoke
-          path: pr65-live-smoke.png
+          path: |
+            pr65-live-smoke.png
+            browser-output.txt
           if-no-files-found: ignore
           retention-days: 3
