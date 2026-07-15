@@ -1,0 +1,131 @@
+name: PR 65 live validation
+
+on:
+  push:
+    branches:
+      - validation/pr65-live-smoke
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out production main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            war_room_offer_engine/requirements.txt
+
+      - name: Install application and browser dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          if [[ -f requirements.txt ]]; then python -m pip install -r requirements.txt; fi
+          if [[ -f war_room_offer_engine/requirements.txt ]]; then python -m pip install -r war_room_offer_engine/requirements.txt; fi
+          python -m pip install playwright requests
+          python -m playwright install --with-deps chromium
+
+      - name: Compile production source
+        shell: bash
+        run: |
+          python -m compileall -q war_room_offer_engine/war_room_offer_engine
+
+      - name: Run focused production regression tests
+        shell: bash
+        run: |
+          tests=(
+            war_room_offer_engine/war_room_offer_engine/rentcast_comp_normalization_fix_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/rentcast_auto_enrichment_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/address_rentcast_bridge_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/rentcast_state_bootstrap_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/single_section_workspace_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/deal_library_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/deal_library_preflight_smoke_test.py
+          )
+          for test_file in "${tests[@]}"; do
+            if [[ -f "$test_file" ]]; then
+              echo "Running $test_file"
+              python "$test_file"
+            fi
+          done
+
+      - name: Verify live Streamlit health endpoint
+        shell: bash
+        run: |
+          python - <<'PY'
+          import time
+          import requests
+
+          url = "https://war-room-offer-engine.streamlit.app/_stcore/health"
+          last_error = None
+          for attempt in range(12):
+              try:
+                  response = requests.get(url, timeout=30, allow_redirects=True)
+                  print(f"attempt={attempt + 1} status={response.status_code} body={response.text[:200]!r}")
+                  if response.status_code == 200 and "ok" in response.text.lower():
+                      break
+                  last_error = RuntimeError(f"unexpected response: {response.status_code} {response.text[:200]}")
+              except Exception as exc:
+                  last_error = exc
+                  print(f"attempt={attempt + 1} error={exc}")
+              time.sleep(10)
+          else:
+              raise SystemExit(f"Live Streamlit health check failed: {last_error}")
+          PY
+
+      - name: Verify live application renders the production workspace
+        shell: bash
+        run: |
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+
+          url = "https://war-room-offer-engine.streamlit.app"
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True)
+              page = browser.new_page(viewport={"width": 1440, "height": 1100})
+              page.goto(url, wait_until="domcontentloaded", timeout=180_000)
+              page.wait_for_timeout(15_000)
+              body = page.locator("body").inner_text(timeout=30_000)
+              print(body[:8000])
+              lowered = body.lower()
+              fatal_markers = [
+                  "traceback (most recent call last)",
+                  "modulenotfounderror",
+                  "this app has encountered an error",
+                  "application error",
+              ]
+              for marker in fatal_markers:
+                  if marker in lowered:
+                      raise AssertionError(f"Live app displayed fatal marker: {marker}")
+              expected = [
+                  "Deal Decision Center",
+                  "Pull Everything & Tell Me",
+                  "Property address or listing link",
+              ]
+              missing = [text for text in expected if text not in body]
+              if missing:
+                  raise AssertionError(f"Live app did not render expected production controls: {missing}")
+              page.screenshot(path="pr65-live-smoke.png", full_page=True)
+              browser.close()
+          PY
+
+      - name: Upload live validation screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr65-live-smoke
+          path: pr65-live-smoke.png
+          if-no-files-found: ignore
+          retention-days: 3
