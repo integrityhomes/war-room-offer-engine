@@ -56,6 +56,15 @@ except ImportError:
     except ImportError:
         from war_room_offer_engine import rentcast_property_intelligence as property_intelligence  # noqa: F401
 
+try:
+    import rentcast_intelligence_quality_hardening as intelligence_quality  # noqa: F401 - keep transaction pairs intact and stop weak evidence from moving primary rent or ARV
+except ImportError:
+    try:
+        from . import rentcast_intelligence_quality_hardening as intelligence_quality  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_intelligence_quality_hardening as intelligence_quality  # noqa: F401
+
+intelligence_quality.install()
 preview_control.install_dispatch_gate(property_intelligence)
 
 try:
