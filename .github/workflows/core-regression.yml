@@ -45,6 +45,7 @@ jobs:
             war_room_offer_engine/war_room_offer_engine/rentcast_property_intelligence_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/rentcast_intelligence_quality_hardening_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/rentcast_intelligence_comps_ui_fix_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/rentcast_intelligence_rent_ui_fix_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/rentcast_comp_normalization_fix_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/rentcast_auto_enrichment_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/address_rentcast_bridge_smoke_test.py
