@@ -85,6 +85,18 @@ intelligence_comps_ui.install()
 intelligence_rent_ui.install()
 preview_control.install_dispatch_gate(property_intelligence)
 
+# Install credit counting only after the preview dispatch gate is complete so the
+# guard can distinguish the production path from the rural-intelligence path.
+try:
+    import rentcast_credit_guard as credit_guard  # noqa: F401 - estimate, count and cap paid RentCast requests
+except ImportError:
+    try:
+        from . import rentcast_credit_guard as credit_guard  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_credit_guard as credit_guard  # noqa: F401
+
+credit_guard.install()
+
 try:
     import one_load_sources as base
     import zillow_url_import_safe as zillow_safe
