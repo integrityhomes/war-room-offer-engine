@@ -41,6 +41,33 @@ except ImportError:
         from war_room_offer_engine import rentcast_comp_normalization_fix  # noqa: F401
 
 try:
+    import rentcast_intelligence_preview as preview_control  # noqa: F401 - keep PR #67 off by default and expose a session-only test switch
+except ImportError:
+    try:
+        from . import rentcast_intelligence_preview as preview_control  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_intelligence_preview as preview_control  # noqa: F401
+
+try:
+    import rentcast_property_intelligence as property_intelligence  # noqa: F401 - recorded-sale ARV, rural rental comps, provenance and confidence safeguards
+except ImportError:
+    try:
+        from . import rentcast_property_intelligence as property_intelligence  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_property_intelligence as property_intelligence  # noqa: F401
+
+try:
+    import rentcast_intelligence_quality_hardening as intelligence_quality  # noqa: F401 - keep transaction pairs intact and stop weak evidence from moving primary rent or ARV
+except ImportError:
+    try:
+        from . import rentcast_intelligence_quality_hardening as intelligence_quality  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_intelligence_quality_hardening as intelligence_quality  # noqa: F401
+
+intelligence_quality.install()
+preview_control.install_dispatch_gate(property_intelligence)
+
+try:
     import one_load_sources as base
     import zillow_url_import_safe as zillow_safe
     from data_sources import get_secret
@@ -63,6 +90,7 @@ except ImportError:
 
 zillow_safe.base.score_zillow_row = safe_score_zillow_row
 _original_safe_zillow_pull = zillow_safe.pull_zillow_listing
+_original_normalize_one_load_lead = base.normalize_one_load_lead
 
 
 def pull_zillow_listing_with_rentcast(listing_url: str, address: str = "", limit: int = 10):
@@ -87,7 +115,48 @@ base.pull_zillow_listing = pull_zillow_listing_with_rentcast
 
 
 def normalize_one_load_lead(payload):
-    return base.normalize_one_load_lead(payload)
+    summary = _original_normalize_one_load_lead(payload)
+    if not preview_control.preview_enabled():
+        return summary
+    record = payload.get("record", {}) if isinstance(payload, dict) and isinstance(payload.get("record", {}), dict) else {}
+    data = summary.get("data", {}) if isinstance(summary, dict) else {}
+    if record and isinstance(data, dict):
+        intelligence_keys = set(property_intelligence.INTELLIGENCE_STATE_KEYS) | {
+            "rent", "rent_estimate", "rent_source", "rent_confidence", "rent_verification_needed",
+            "rent_comps", "rent_comp_count", "rent_comp_average", "rent_comp_median", "rent_low", "rent_high",
+            "rentcast_rent_comps", "rentcast_rent_comp_count", "rentcast_comp_count",
+            "arv", "arv_source", "arv_confidence", "arv_fallback_reason", "rentcast_arv",
+            "rentcast_sold_comps", "rentcast_sold_comp_count", "rentcast_value_comp_count",
+            "auto_sold_comps", "auto_comp_count", "auto_arv_summary", "auto_recommended_arv",
+            "auto_low_arv", "auto_conservative_arv", "auto_average_arv", "auto_high_arv",
+            "strong_comp_count", "good_comp_count", "weak_comp_count", "excluded_comp_count",
+            "auto_comp_radius", "auto_comp_date_range", "taxes", "tax_assessed_value",
+            "last_sale_date", "last_sale_price", "county", "latitude", "longitude",
+            "assessor_id", "subdivision", "zoning", "hoa_fee", "hoa_frequency",
+        }
+        for key in intelligence_keys:
+            if key in record:
+                data[key] = record.get(key)
+        summary["data"] = data
+        summary["arv_source"] = record.get("arv_source") or summary.get("arv_source", "Missing")
+        summary["arv_confidence"] = record.get("arv_confidence") or summary.get("arv_confidence", "Not enough data")
+        summary["rent_confidence"] = record.get("rent_confidence") or summary.get("rent_confidence", "Weak")
+        summary["status_checklist"] = base.one_load_status_checklist(summary)
+    return summary
+
+
+base.normalize_one_load_lead = normalize_one_load_lead
+try:
+    import sys
+    for module_name in [
+        "ui_sections.one_load_deal_ui",
+        "war_room_offer_engine.ui_sections.one_load_deal_ui",
+    ]:
+        loaded = sys.modules.get(module_name)
+        if loaded is not None:
+            loaded.normalize_one_load_lead = normalize_one_load_lead
+except Exception:
+    pass
 
 
 def parse_seller_notes(text):

@@ -1,0 +1,61 @@
+name: Core regression
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            war_room_offer_engine/requirements.txt
+
+      - name: Install application dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          if [[ -f requirements.txt ]]; then python -m pip install -r requirements.txt; fi
+          if [[ -f war_room_offer_engine/requirements.txt ]]; then python -m pip install -r war_room_offer_engine/requirements.txt; fi
+
+      - name: Compile production source
+        shell: bash
+        run: python -m compileall -q war_room_offer_engine/war_room_offer_engine
+
+      - name: Run focused regression suite
+        shell: bash
+        run: |
+          tests=(
+            war_room_offer_engine/war_room_offer_engine/rentcast_property_intelligence_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/rentcast_intelligence_quality_hardening_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/rentcast_comp_normalization_fix_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/rentcast_auto_enrichment_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/address_rentcast_bridge_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/rentcast_state_bootstrap_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/deal_decision_logic_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/single_section_workspace_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/deal_library_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/deal_library_preflight_smoke_test.py
+          )
+          for test_file in "${tests[@]}"; do
+            if [[ -f "$test_file" ]]; then
+              echo "Running $test_file"
+              python "$test_file"
+            fi
+          done
