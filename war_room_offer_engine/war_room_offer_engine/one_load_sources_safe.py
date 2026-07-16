@@ -64,7 +64,25 @@ except ImportError:
     except ImportError:
         from war_room_offer_engine import rentcast_intelligence_quality_hardening as intelligence_quality  # noqa: F401
 
+try:
+    import rentcast_intelligence_comps_ui_fix as intelligence_comps_ui  # noqa: F401 - preserve recorded-sale confidence and adaptive search details in Comps / ARV
+except ImportError:
+    try:
+        from . import rentcast_intelligence_comps_ui_fix as intelligence_comps_ui  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_intelligence_comps_ui_fix as intelligence_comps_ui  # noqa: F401
+
+try:
+    import rentcast_intelligence_rent_ui_fix as intelligence_rent_ui  # noqa: F401 - separate total rural rental listings from verified rent support
+except ImportError:
+    try:
+        from . import rentcast_intelligence_rent_ui_fix as intelligence_rent_ui  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_intelligence_rent_ui_fix as intelligence_rent_ui  # noqa: F401
+
 intelligence_quality.install()
+intelligence_comps_ui.install()
+intelligence_rent_ui.install()
 preview_control.install_dispatch_gate(property_intelligence)
 
 try:
