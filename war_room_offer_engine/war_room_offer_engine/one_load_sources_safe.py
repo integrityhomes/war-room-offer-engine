@@ -49,7 +49,7 @@ except ImportError:
         from war_room_offer_engine import rentcast_intelligence_preview as preview_control  # noqa: F401
 
 try:
-    import rentcast_property_intelligence as property_intelligence  # noqa: F401 - recorded-sale ARV, rural rental comps, provenance and confidence safeguards
+    import rentcast_property_intelligence as property_intelligence  # noqa: F401 - recorded-sale ARV, adaptive rental comps, provenance and confidence safeguards
 except ImportError:
     try:
         from . import rentcast_property_intelligence as property_intelligence  # noqa: F401
@@ -73,7 +73,7 @@ except ImportError:
         from war_room_offer_engine import rentcast_intelligence_comps_ui_fix as intelligence_comps_ui  # noqa: F401
 
 try:
-    import rentcast_intelligence_rent_ui_fix as intelligence_rent_ui  # noqa: F401 - separate total rural rental listings from verified rent support
+    import rentcast_intelligence_rent_ui_fix as intelligence_rent_ui  # noqa: F401 - separate total rental listings from verified rent support
 except ImportError:
     try:
         from . import rentcast_intelligence_rent_ui_fix as intelligence_rent_ui  # noqa: F401
@@ -81,7 +81,7 @@ except ImportError:
         from war_room_offer_engine import rentcast_intelligence_rent_ui_fix as intelligence_rent_ui  # noqa: F401
 
 try:
-    import rentcast_intelligence_rent_reconciliation as rent_reconciliation  # noqa: F401 - derive counts, confidence and metrics from selected rural evidence
+    import rentcast_intelligence_rent_reconciliation as rent_reconciliation  # noqa: F401 - derive counts, confidence and metrics from selected evidence
 except ImportError:
     try:
         from . import rentcast_intelligence_rent_reconciliation as rent_reconciliation  # noqa: F401
@@ -92,6 +92,20 @@ intelligence_quality.install()
 intelligence_comps_ui.install()
 intelligence_rent_ui.install()
 rent_reconciliation.install()
+
+# Install complete-address and resolved-location safeguards before the dispatch
+# gate captures the verified engine. This prevents an ambiguous street-only input
+# from being resolved to another city or state and stops further paid searches
+# immediately when the subject record does not match the requested location.
+try:
+    import property_location_safety as location_safety  # noqa: F401
+except ImportError:
+    try:
+        from . import property_location_safety as location_safety  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import property_location_safety as location_safety  # noqa: F401
+
+location_safety.install_engine()
 preview_control.install_dispatch_gate(property_intelligence)
 
 # The dispatch gate must exist before the mode lock is installed. The mode lock
@@ -107,6 +121,18 @@ except ImportError:
 
 intelligence_mode.install()
 
+# Install the decision guard after verified/basic dispatch is complete so both
+# modes reject incomplete locations and mismatched subject records.
+try:
+    import property_location_decision_guard as location_decision  # noqa: F401
+except ImportError:
+    try:
+        from . import property_location_decision_guard as location_decision  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import property_location_decision_guard as location_decision  # noqa: F401
+
+location_decision.install()
+
 # Install credit counting only after the dispatch gate and mode lock are complete
 # so the budget reflects the engine that will actually run.
 try:
@@ -118,6 +144,7 @@ except ImportError:
         from war_room_offer_engine import rentcast_credit_guard as credit_guard  # noqa: F401
 
 credit_guard.install()
+location_safety.install_ui()
 
 try:
     import one_load_sources as base
@@ -159,6 +186,8 @@ def pull_zillow_listing_with_rentcast(listing_url: str, address: str = "", limit
         result["warnings"].append(enriched["rentcast_rent_error"])
     if enriched.get("rentcast_value_error"):
         result["warnings"].append(enriched["rentcast_value_error"])
+    if enriched.get("location_verification_error"):
+        result["warnings"].append(enriched["location_verification_error"])
     return result
 
 
