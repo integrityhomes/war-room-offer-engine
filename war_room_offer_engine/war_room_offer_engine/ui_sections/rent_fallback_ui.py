@@ -29,20 +29,56 @@ RENT_CONFIDENCE_LEVELS = [
 ]
 
 
+def _state_has_rentcast_evidence(st) -> bool:
+    state = st.session_state
+    source = str(state.get("rent_source", "") or "").strip().lower()
+    comps = state.get("rentcast_rent_comps", []) or state.get("rent_comps", [])
+    return bool(
+        comps
+        or str(state.get("rentcast_submitted_address", "") or "").strip()
+        or str(state.get("rentcast_rent_error", "") or "").strip()
+        or state.get("rentcast_lookup_retry_used")
+        or float(state.get("rentcast_rent_avm", 0) or 0) > 0
+        or source.startswith("rentcast")
+        or any(
+            key in state
+            for key in (
+                "verified_rent_comp_count",
+                "rent_search_mode",
+                "rent_requires_human_verification",
+                "rent_comp_quality_summary",
+            )
+        )
+    )
+
+
 def _normalized_data(st) -> dict:
     normalized = st.session_state.get("one_load_normalized", {}) or {}
     original = normalized.get("data", {}) if isinstance(normalized, dict) else {}
     data = dict(original) if isinstance(original, dict) else {}
 
-    # Plain-address pulls store their returned RentCast data directly in session
-    # state. Merge those fields into the same display model used by Zillow links.
+    # Plain-address pulls store returned RentCast data directly in session state.
+    # Do not merge a generic/default rent into this RentCast display unless the
+    # same state also contains RentCast provenance. This prevents the app's old
+    # $900 placeholder from being presented as a verified API result after a
+    # Streamlit redeploy or a new browser session.
+    state_has_evidence = _state_has_rentcast_evidence(st)
+    state_comps = st.session_state.get("rentcast_rent_comps", []) or st.session_state.get("rent_comps", [])
     state_fallbacks = {
-        "rent": st.session_state.get("rent", 0),
-        "rent_estimate": st.session_state.get("rent", 0),
-        "rent_comps": st.session_state.get("rentcast_rent_comps", []) or st.session_state.get("rent_comps", []),
+        "rent": st.session_state.get("rent", 0) if state_has_evidence else 0,
+        "rent_estimate": st.session_state.get("rent", 0) if state_has_evidence else 0,
+        "rent_source": st.session_state.get("rent_source", "") if state_has_evidence else "",
+        "rent_confidence": st.session_state.get("rent_confidence", "") if state_has_evidence else "",
+        "rent_verification_needed": st.session_state.get("rent_verification_needed", "") if state_has_evidence else "",
+        "rent_comps": state_comps,
         "rent_comp_count": st.session_state.get("rentcast_rent_comp_count", 0) or st.session_state.get("rentcast_comp_count", 0),
         "rent_comp_average": st.session_state.get("rentcast_rent_comp_average", 0) or st.session_state.get("rent_comp_average", 0),
         "rent_comp_median": st.session_state.get("rentcast_rent_comp_median", 0) or st.session_state.get("rent_comp_median", 0),
+        "rentcast_rent_avm": st.session_state.get("rentcast_rent_avm", 0),
+        "verified_rent_comp_count": st.session_state.get("verified_rent_comp_count", 0),
+        "rent_search_mode": st.session_state.get("rent_search_mode", ""),
+        "rent_requires_human_verification": st.session_state.get("rent_requires_human_verification"),
+        "rent_comp_quality_summary": st.session_state.get("rent_comp_quality_summary", {}),
         "rentcast_submitted_address": st.session_state.get("rentcast_submitted_address", ""),
         "rentcast_rent_error": st.session_state.get("rentcast_rent_error", ""),
         "rentcast_lookup_retry_used": st.session_state.get("rentcast_lookup_retry_used", False),
@@ -69,15 +105,50 @@ def _rentcast_comps(st) -> list[dict]:
     return clean
 
 
+def _data_has_rentcast_evidence(st, data: dict, comps: list[dict]) -> bool:
+    source = str(data.get("rent_source") or st.session_state.get("rent_source") or "").strip().lower()
+    return bool(
+        comps
+        or str(data.get("rentcast_submitted_address", "") or "").strip()
+        or str(data.get("rentcast_rent_error", "") or "").strip()
+        or data.get("rentcast_lookup_retry_used")
+        or float(data.get("rentcast_rent_avm", 0) or 0) > 0
+        or source.startswith("rentcast")
+        or any(
+            key in data
+            for key in (
+                "verified_rent_comp_count",
+                "rent_search_mode",
+                "rent_requires_human_verification",
+                "rent_comp_quality_summary",
+            )
+        )
+    )
+
+
 def _apply_rentcast_state(st, data: dict, comps: list[dict]) -> None:
     rent = int(float(data.get("rent") or data.get("rent_estimate") or 0))
     if rent > 0:
         st.session_state["rent"] = rent
-    st.session_state["rent_source"] = "RentCast"
-    st.session_state["rent_confidence"] = (
-        "Strong verified rent comps" if len(comps) >= 3 else "Medium fallback comps" if rent > 0 else "Missing"
-    )
-    st.session_state["rent_verification_needed"] = "No" if len(comps) >= 3 else "Yes"
+    if len(comps) >= 3:
+        source = "RentCast Rental Comps"
+        confidence = "Strong verified rent comps"
+        verification_needed = "No"
+    elif comps:
+        source = "RentCast Rental Comps"
+        confidence = "Medium fallback comps"
+        verification_needed = "Yes"
+    elif rent > 0:
+        source = "RentCast AVM only"
+        confidence = "Weak / AVM only"
+        verification_needed = "Yes"
+    else:
+        source = "Missing / RentCast unavailable"
+        confidence = "Missing"
+        verification_needed = "Yes"
+    st.session_state["rent_source"] = source
+    st.session_state["rent_confidence"] = confidence
+    st.session_state["rent_verification_needed"] = verification_needed
     st.session_state["rentcast_comp_count"] = len(comps)
     st.session_state["rentcast_rent_comp_count"] = len(comps)
     st.session_state["rent_comp_count"] = len(comps)
@@ -93,14 +164,26 @@ def render_rent_fallback_section(st, ui) -> None:
     rentcast_rent = int(float(data.get("rent") or data.get("rent_estimate") or 0))
     rentcast_error = str(data.get("rentcast_rent_error") or "")
     submitted_address = str(data.get("rentcast_submitted_address") or "")
+    has_rentcast_evidence = _data_has_rentcast_evidence(st, data, comps)
 
-    if rentcast_rent > 0 or comps:
+    if has_rentcast_evidence and (rentcast_rent > 0 or comps):
         _apply_rentcast_state(st, data, comps)
-        st.success(
-            f"RentCast verified ${rentcast_rent:,.0f}/month with {len(comps)} comparable rental(s)."
-            if rentcast_rent > 0
-            else f"RentCast returned {len(comps)} comparable rental(s)."
-        )
+        if len(comps) >= 3:
+            st.success(
+                f"RentCast supports ${rentcast_rent:,.0f}/month with {len(comps)} comparable rental(s)."
+                if rentcast_rent > 0
+                else f"RentCast returned {len(comps)} comparable rental(s)."
+            )
+        elif comps:
+            st.warning(
+                f"RentCast estimates ${rentcast_rent:,.0f}/month with only {len(comps)} comparable rental(s). Verify rent before committing."
+                if rentcast_rent > 0
+                else f"RentCast returned only {len(comps)} comparable rental(s). Verify rent before committing."
+            )
+        else:
+            st.warning(
+                f"RentCast estimates ${rentcast_rent:,.0f}/month, but returned no comparable rentals. Treat this as an AVM-only reference."
+            )
         if submitted_address:
             st.caption(f"Address submitted to RentCast: {submitted_address}")
         if data.get("rentcast_lookup_retry_used"):
@@ -128,7 +211,7 @@ def render_rent_fallback_section(st, ui) -> None:
         st.info(f"Rent confidence: {st.session_state.get('rent_confidence', 'Missing')}")
         return
 
-    st.warning("RentCast did not return a usable rent estimate or comparable rentals for the submitted property.")
+    st.warning("No current RentCast rent result is loaded for this property. A default or manually entered rent is not an API verification.")
     if submitted_address:
         st.caption(f"Address submitted to RentCast: {submitted_address}")
     if rentcast_error:
