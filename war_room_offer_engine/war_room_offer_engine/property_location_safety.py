@@ -9,7 +9,6 @@ try:
     import deal_library as library
     import property_location_guard as location
     import rentcast_auto_enrichment as rentcast
-    import rentcast_credit_guard as credit_guard
     import rentcast_intelligence_core as core
     import rentcast_intelligence_preview as preview
     import rentcast_intelligence_rent_reconciliation as rent_reconciliation
@@ -22,7 +21,6 @@ except ImportError:
         from . import deal_library as library
         from . import property_location_guard as location
         from . import rentcast_auto_enrichment as rentcast
-        from . import rentcast_credit_guard as credit_guard
         from . import rentcast_intelligence_core as core
         from . import rentcast_intelligence_preview as preview
         from . import rentcast_intelligence_rent_reconciliation as rent_reconciliation
@@ -34,7 +32,6 @@ except ImportError:
         from war_room_offer_engine import deal_library as library
         from war_room_offer_engine import property_location_guard as location
         from war_room_offer_engine import rentcast_auto_enrichment as rentcast
-        from war_room_offer_engine import rentcast_credit_guard as credit_guard
         from war_room_offer_engine import rentcast_intelligence_core as core
         from war_room_offer_engine import rentcast_intelligence_preview as preview
         from war_room_offer_engine import rentcast_intelligence_rent_reconciliation as rent_reconciliation
@@ -75,16 +72,17 @@ _ORIGINAL_RENT_ANALYSIS = getattr(
     "_location_safety_original_rent_analysis",
     enrichment.analyze_rent_intelligence,
 )
-_ORIGINAL_CREDIT_PANEL = getattr(
-    credit_guard,
-    "_location_safety_original_credit_panel",
-    credit_guard.render_credit_panel,
-)
-_ORIGINAL_BUTTON_GUARD = getattr(
-    credit_guard,
-    "_location_safety_original_button_guard",
-    credit_guard._button_should_be_disabled,
-)
+
+
+def _credit_module():
+    try:
+        import rentcast_credit_guard as credit_guard
+    except ImportError:
+        try:
+            from . import rentcast_credit_guard as credit_guard
+        except ImportError:
+            from war_room_offer_engine import rentcast_credit_guard as credit_guard
+    return credit_guard
 
 
 def _full_address(data: dict[str, Any] | None) -> str:
@@ -230,6 +228,7 @@ def _input_value(state: Any) -> str:
 
 
 def render_credit_panel_with_location_guard(st: Any) -> None:
+    credit_guard = _credit_module()
     state = st.session_state
     credit_guard._reset_confirmation_for_property(st)
     preview_on = preview.preview_enabled(st)
@@ -293,11 +292,17 @@ def render_credit_panel_with_location_guard(st: Any) -> None:
 
 
 def button_guard_with_location(st: Any) -> tuple[bool, str]:
+    credit_guard = _credit_module()
     value = _input_value(st.session_state)
     complete, message = location.validate_property_input(value)
     if not complete:
         return True, message
-    return _ORIGINAL_BUTTON_GUARD(st)
+    original = getattr(
+        credit_guard,
+        "_location_safety_original_button_guard",
+        None,
+    )
+    return original(st) if callable(original) else (False, "")
 
 
 def install_engine() -> bool:
@@ -328,6 +333,8 @@ def install_engine() -> bool:
         "resolved_property_address",
         "wide_area_search_used",
         "search_scope_note",
+        "property_input_location_valid",
+        "property_input_location_error",
     ):
         core.INTELLIGENCE_STATE_KEYS.add(key)
         if key not in library.PERSISTED_STATE_KEYS:
@@ -338,10 +345,19 @@ def install_engine() -> bool:
 
 
 def install_ui() -> bool:
+    credit_guard = _credit_module()
     if getattr(credit_guard, "_property_location_safety_ui_installed", False):
         return True
-    credit_guard._location_safety_original_credit_panel = _ORIGINAL_CREDIT_PANEL
-    credit_guard._location_safety_original_button_guard = _ORIGINAL_BUTTON_GUARD
+    credit_guard._location_safety_original_credit_panel = getattr(
+        credit_guard,
+        "_location_safety_original_credit_panel",
+        credit_guard.render_credit_panel,
+    )
+    credit_guard._location_safety_original_button_guard = getattr(
+        credit_guard,
+        "_location_safety_original_button_guard",
+        credit_guard._button_should_be_disabled,
+    )
     credit_guard.render_credit_panel = render_credit_panel_with_location_guard
     credit_guard._button_should_be_disabled = button_guard_with_location
     credit_guard._property_location_safety_ui_installed = True
