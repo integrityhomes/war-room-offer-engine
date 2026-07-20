@@ -7,6 +7,14 @@ from urllib.parse import quote
 
 import requests
 
+try:
+    import team_offer_identity as offer_identity
+except ImportError:
+    try:
+        from . import team_offer_identity as offer_identity
+    except ImportError:
+        from war_room_offer_engine import team_offer_identity as offer_identity
+
 
 TWILIO_LOOKUP_URL = "https://lookups.twilio.com/v2/PhoneNumbers"
 
@@ -244,6 +252,10 @@ def _first_name(name: str) -> str:
     return text.split()[0] if text else "there"
 
 
+def _sender_name(value: Any = "") -> str:
+    return offer_identity.outreach_sender_name(value) or "Acquisitions Team"
+
+
 def build_first_touch_outreach(
     *,
     agent_name: str,
@@ -251,17 +263,18 @@ def build_first_touch_outreach(
     offer_price: Any = 0,
     asking_price: Any = 0,
     closing_days: int = 14,
-    buyer_name: str = "our company",
+    buyer_name: str = "",
 ) -> dict[str, str]:
     first_name = _first_name(agent_name)
     offer = money(offer_price)
     asking = money(asking_price)
+    sender = _sender_name(buyer_name)
     close_text = f"close in about {int(closing_days or 14)} days"
     walkthrough_text = "This offer is contingent on a walkthrough and confirmation of the property condition."
 
     if offer:
         text = (
-            f"Hi {first_name}, this is Shawn. I’m reaching out about {address}. "
+            f"Hi {first_name}, this is {sender}. I’m reaching out about {address}. "
             f"We can offer {offer}, purchase as-is, and {close_text}. "
             f"{walkthrough_text} Is the seller open to reviewing that? Please text me back when you can."
         )
@@ -273,12 +286,12 @@ def build_first_touch_outreach(
             "This offer is contingent on a walkthrough, confirmation of the property condition, "
             "and confirmation of title, access, and the property information provided.\n\n"
             "Please let me know whether the seller is open to reviewing this or if there is a price range that would receive serious consideration.\n\n"
-            "Thank you,\nShawn"
+            f"Thank you,\n{sender}"
         )
     else:
         price_reference = f" The current asking price appears to be {asking}." if asking else ""
         text = (
-            f"Hi {first_name}, this is Shawn. I’m looking at {address}.{price_reference} "
+            f"Hi {first_name}, this is {sender}. I’m looking at {address}.{price_reference} "
             "Is it still available, and does the seller have any flexibility for an as-is purchase with a clean closing? "
             "Any offer would be contingent on a walkthrough and confirmation of the property condition."
         )
@@ -288,15 +301,21 @@ def build_first_touch_outreach(
             f"I’m reviewing {address}.{price_reference} Is the property still available, and does the seller have any flexibility "
             "for an as-is purchase with a straightforward closing? Any offer would be contingent on a walkthrough and confirmation "
             "of the property condition. Please share any known repairs, occupancy details, and the seller’s timing.\n\n"
-            "Thank you,\nShawn"
+            f"Thank you,\n{sender}"
         )
 
     follow_up = (
-        f"Hi {first_name}, following up on {address}. Were you able to confirm whether the seller would consider "
+        f"Hi {first_name}, this is {sender}, following up on {address}. Were you able to confirm whether the seller would consider "
         + (f"the {offer} as-is offer" if offer else "an as-is offer below asking")
         + "? The offer would remain contingent on a walkthrough and confirmation of the property condition."
     )
-    return {"text": text, "email_subject": subject, "email_body": email_body, "follow_up_text": follow_up}
+    return {
+        "text": text,
+        "email_subject": subject,
+        "email_body": email_body,
+        "follow_up_text": follow_up,
+        "offer_made_by": sender,
+    }
 
 
 def preferred_contact_method(contact: dict[str, Any], phone_info: dict[str, Any]) -> str:
@@ -315,7 +334,9 @@ def build_realtor_contact_package(
     normalized: dict[str, Any],
     offer_price: Any = 0,
     asking_price: Any = 0,
+    buyer_name: str = "",
 ) -> dict[str, Any]:
+    sender = _sender_name(buyer_name)
     contact = extract_realtor_contact(record, normalized)
     phone_info = classify_phone(contact.get("phone_e164") or contact.get("phone", ""))
     outreach = build_first_touch_outreach(
@@ -323,12 +344,14 @@ def build_realtor_contact_package(
         address=str(normalized.get("address") or record.get("address") or "the property"),
         offer_price=offer_price,
         asking_price=asking_price or normalized.get("asking_price", 0),
+        buyer_name=sender,
     )
     return {
         "contact": contact,
         "phone_info": phone_info,
         "preferred_contact_method": preferred_contact_method(contact, phone_info),
         "outreach": outreach,
+        "offer_made_by": sender,
     }
 
 
@@ -359,6 +382,7 @@ def build_master_feed_fields(
         "Preferred_Contact_Method": contact_package.get("preferred_contact_method", "Needs agent contact lookup"),
         "Opening_Message": outreach.get("text", ""),
         "Follow_Up_Message": outreach.get("follow_up_text", ""),
+        "Offer_Made_By": contact_package.get("offer_made_by") or outreach.get("offer_made_by") or _sender_name(),
         "Deal_Type": deal_type,
         "Deal_Type_Auto": deal_type,
         "Internal_Status": "New",
