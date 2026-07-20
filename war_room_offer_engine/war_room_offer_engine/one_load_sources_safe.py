@@ -41,7 +41,7 @@ except ImportError:
         from war_room_offer_engine import rentcast_comp_normalization_fix  # noqa: F401
 
 try:
-    import rentcast_intelligence_preview as preview_control  # noqa: F401 - keep PR #67 off by default and expose a session-only test switch
+    import rentcast_intelligence_preview as preview_control  # noqa: F401 - verified-intelligence switch and evidence routing
 except ImportError:
     try:
         from . import rentcast_intelligence_preview as preview_control  # noqa: F401
@@ -94,8 +94,21 @@ intelligence_rent_ui.install()
 rent_reconciliation.install()
 preview_control.install_dispatch_gate(property_intelligence)
 
-# Install credit counting only after the preview dispatch gate is complete so the
-# guard can distinguish the production path from the rural-intelligence path.
+# The dispatch gate must exist before the mode lock is installed. The mode lock
+# makes verified intelligence the accuracy-first default, keeps loaded evidence
+# tied to its matching UI/decision rules, and allows complete team saves.
+try:
+    import rentcast_intelligence_mode_lock as intelligence_mode  # noqa: F401
+except ImportError:
+    try:
+        from . import rentcast_intelligence_mode_lock as intelligence_mode  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_intelligence_mode_lock as intelligence_mode  # noqa: F401
+
+intelligence_mode.install()
+
+# Install credit counting only after the dispatch gate and mode lock are complete
+# so the budget reflects the engine that will actually run.
 try:
     import rentcast_credit_guard as credit_guard  # noqa: F401 - estimate, count and cap paid RentCast requests
 except ImportError:
@@ -161,6 +174,8 @@ def normalize_one_load_lead(payload):
     data = summary.get("data", {}) if isinstance(summary, dict) else {}
     if record and isinstance(data, dict):
         intelligence_keys = set(property_intelligence.INTELLIGENCE_STATE_KEYS) | {
+            preview_control.PREVIEW_ACTIVE_KEY,
+            intelligence_mode.MODE_KEY,
             "rent", "rent_estimate", "rent_source", "rent_confidence", "rent_verification_needed",
             "rent_comps", "rent_comp_count", "rent_comp_average", "rent_comp_median", "rent_low", "rent_high",
             "rentcast_rent_comps", "rentcast_rent_comp_count", "rentcast_comp_count",
@@ -176,6 +191,8 @@ def normalize_one_load_lead(payload):
         for key in intelligence_keys:
             if key in record:
                 data[key] = record.get(key)
+        data[preview_control.PREVIEW_ACTIVE_KEY] = True
+        data[intelligence_mode.MODE_KEY] = intelligence_mode.MODE_VERIFIED
         summary["data"] = data
         summary["arv_source"] = record.get("arv_source") or summary.get("arv_source", "Missing")
         summary["arv_confidence"] = record.get("arv_confidence") or summary.get("arv_confidence", "Not enough data")
