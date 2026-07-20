@@ -146,6 +146,18 @@ except ImportError:
 credit_guard.install()
 location_safety.install_ui()
 
+# Team identity is installed after the decision, credit, and location wrappers so
+# the selected teammate is required without bypassing any paid-data safeguard.
+try:
+    import team_offer_integration as team_offer  # noqa: F401
+except ImportError:
+    try:
+        from . import team_offer_integration as team_offer  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import team_offer_integration as team_offer  # noqa: F401
+
+team_offer.install()
+
 try:
     import data_sources as ds
     import one_load_sources as base
