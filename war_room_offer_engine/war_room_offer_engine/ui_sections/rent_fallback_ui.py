@@ -36,12 +36,18 @@ def _text(value) -> str:
     return str(value or "").strip()
 
 
+def _source_is_rentcast(value) -> bool:
+    source = _text(value).lower()
+    return "rentcast" in source and not any(
+        marker in source for marker in ["missing", "unavailable"]
+    )
+
+
 def _rentcast_evidence_present(data: dict, comps: list[dict] | None = None) -> bool:
     comps = comps if isinstance(comps, list) else data.get("rent_comps", [])
     if isinstance(comps, list) and any(isinstance(row, dict) for row in comps):
         return True
-    source = _text(data.get("rent_source")).lower()
-    if "rentcast" in source:
+    if _source_is_rentcast(data.get("rent_source")):
         return True
     return any(
         data.get(key) not in _EMPTY
@@ -58,8 +64,7 @@ def _rentcast_evidence_present(data: dict, comps: list[dict] | None = None) -> b
 
 def _state_rentcast_evidence_present(st) -> bool:
     state = st.session_state
-    source = _text(state.get("rent_source")).lower()
-    if "rentcast" in source:
+    if _source_is_rentcast(state.get("rent_source")):
         return True
     rows = state.get("rentcast_rent_comps") or []
     if isinstance(rows, list) and rows:
@@ -131,7 +136,7 @@ def _apply_rentcast_state(st, data: dict, comps: list[dict]) -> None:
     if rent > 0:
         st.session_state["rent"] = rent
     source = _text(data.get("rent_source"))
-    if "rentcast" not in source.lower():
+    if not _source_is_rentcast(source):
         source = "RentCast" if comps else "RentCast AVM only" if rent > 0 else "Missing"
     st.session_state["rent_source"] = source
     st.session_state["rent_confidence"] = (
