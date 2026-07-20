@@ -95,14 +95,18 @@ def parse_property_input(value: Any) -> dict[str, Any]:
         result["state"] = state_match.group(1).upper()
 
     parts = [part.strip() for part in raw.split(",") if part.strip()]
-    if parts:
+    if len(parts) >= 2:
         result["street"] = parts[0]
     else:
         street = raw
         if zip_match:
             street = street[: zip_match.start()].strip(" ,")
-        if state_match and state_match.start() < len(street):
-            street = street[: state_match.start()].strip(" ,")
+        state_in_street = None
+        for match in re.finditer(r"\b([A-Za-z]{2})\b", street):
+            if match.group(1).upper() in STATE_CODES:
+                state_in_street = match
+        if state_in_street:
+            street = street[: state_in_street.start()].strip(" ,")
         result["street"] = street
 
     if len(parts) >= 3:
