@@ -121,6 +121,18 @@ except ImportError:
 
 intelligence_mode.install()
 
+# Install the decision guard after verified/basic dispatch is complete so both
+# modes reject incomplete locations and mismatched subject records.
+try:
+    import property_location_decision_guard as location_decision  # noqa: F401
+except ImportError:
+    try:
+        from . import property_location_decision_guard as location_decision  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import property_location_decision_guard as location_decision  # noqa: F401
+
+location_decision.install()
+
 # Install credit counting only after the dispatch gate and mode lock are complete
 # so the budget reflects the engine that will actually run.
 try:
