@@ -85,7 +85,7 @@ def parse_property_input(value: Any) -> dict[str, Any]:
     if not result["complete"]:
         result["message"] = (
             "Enter the complete property location before using paid data: street, city, state, and preferably ZIP. "
-            "Example: 404 4th St, Montgomery, AL 36104."
+            "Example: 404 4th St, Montgomery, AL 36110."
         )
     return result
 
