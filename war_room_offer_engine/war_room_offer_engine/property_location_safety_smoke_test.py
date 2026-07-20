@@ -33,9 +33,11 @@ for address in [
 assert guard.validate_property_input("https://www.zillow.com/homedetails/example")[0] is True
 
 parsed = guard.parse_property_input("404 4th St, Montgomery, AL 36110")
+assert parsed["street"] == "404 4th St"
 assert parsed["city"] == "Montgomery"
 assert parsed["state"] == "AL"
 assert parsed["zip"] == "36110"
+assert guard.parse_property_input("404 4th Street 36110")["street"] == "404 4th Street"
 
 # The live failure resolved a Montgomery, Alabama street-only input to Idaho.
 # A full Montgomery address must reject that subject before rent/ARV searches.
@@ -50,11 +52,26 @@ valid, mismatch = guard.validate_resolved_location(
     },
 )
 assert valid is False
-assert "different location" in mismatch.lower()
+assert "different property or location" in mismatch.lower()
 assert "id instead of al" in mismatch.lower()
 
+# Even the same city/state/ZIP is not enough when RentCast returns a different house.
 valid, mismatch = guard.validate_resolved_location(
     "404 4th St, Montgomery, AL 36110",
+    {
+        "formatted_address": "406 4th St, Montgomery, AL 36110",
+        "address": "406 4th Street",
+        "city": "Montgomery",
+        "state": "AL",
+        "zip": "36110",
+    },
+)
+assert valid is False
+assert "406 4th street instead of 404 4th st" in mismatch.lower()
+
+# Common street suffix variations should still match the same property.
+valid, mismatch = guard.validate_resolved_location(
+    "404 4th Street, Montgomery, AL 36110",
     {
         "formatted_address": "404 4th St, Montgomery, AL 36110",
         "address": "404 4th St",
