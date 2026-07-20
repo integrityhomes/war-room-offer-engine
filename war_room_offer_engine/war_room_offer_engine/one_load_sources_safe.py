@@ -80,9 +80,18 @@ except ImportError:
     except ImportError:
         from war_room_offer_engine import rentcast_intelligence_rent_ui_fix as intelligence_rent_ui  # noqa: F401
 
+try:
+    import rentcast_intelligence_rent_reconciliation as rent_reconciliation  # noqa: F401 - derive counts, confidence and metrics from selected rural evidence
+except ImportError:
+    try:
+        from . import rentcast_intelligence_rent_reconciliation as rent_reconciliation  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import rentcast_intelligence_rent_reconciliation as rent_reconciliation  # noqa: F401
+
 intelligence_quality.install()
 intelligence_comps_ui.install()
 intelligence_rent_ui.install()
+rent_reconciliation.install()
 preview_control.install_dispatch_gate(property_intelligence)
 
 # Install credit counting only after the preview dispatch gate is complete so the
