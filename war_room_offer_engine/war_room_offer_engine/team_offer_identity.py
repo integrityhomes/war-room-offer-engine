@@ -94,12 +94,23 @@ def active_team_member(state: Any) -> str:
     return clean_name(state.get(ACTIVE_MEMBER_KEY, ""))
 
 
-def apply_active_member_to_deal(state: Any) -> bool:
-    """Stamp the current operator onto offer, audit, and assignment fields.
+def offer_maker_for_deal(state: Any) -> str:
+    if not hasattr(state, "get"):
+        return ""
+    return clean_name(state.get(DEAL_OFFER_MAKER_KEY, ""))
+
+
+def apply_active_member_to_deal(
+    state: Any,
+    *,
+    overwrite_offer_maker: bool = False,
+) -> bool:
+    """Stamp the current teammate onto the deal and save audit.
 
     The active operator is session-specific and is intentionally not restored from
-    another teammate's saved deal. Deal history still preserves the person who
-    created each saved version through ``deal_offer_made_by`` and ``updated_by``.
+    another teammate's saved deal. ``updated_by`` always reflects the current
+    teammate. ``deal_offer_made_by`` is filled when blank and is overwritten only
+    when a teammate explicitly starts a new analysis/offer.
     """
     if not hasattr(state, "get"):
         return False
@@ -108,8 +119,14 @@ def apply_active_member_to_deal(state: Any) -> bool:
     if not name:
         return False
 
-    state[DEAL_OFFER_MAKER_KEY] = name
-    state["decision_offer_made_by"] = name
+    current_offer_maker = offer_maker_for_deal(state)
+    if overwrite_offer_maker or not current_offer_maker:
+        state[DEAL_OFFER_MAKER_KEY] = name
+        state["decision_offer_made_by"] = name
+        current_offer_maker = name
+    else:
+        state["decision_offer_made_by"] = current_offer_maker
+
     state["deal_library_updated_by"] = name
     if not clean_name(state.get("deal_library_assigned_to", "")):
         state["deal_library_assigned_to"] = name
@@ -118,7 +135,8 @@ def apply_active_member_to_deal(state: Any) -> bool:
     if isinstance(normalized, dict):
         data = normalized.get("data")
         if isinstance(data, dict):
-            data["offer_made_by"] = name
+            data["offer_made_by"] = current_offer_maker
+            data["updated_by"] = name
     return True
 
 
@@ -130,7 +148,7 @@ def outreach_sender_name(explicit_name: Any = "") -> str:
         import streamlit as st
 
         state = st.session_state
-        return active_team_member(state) or clean_name(state.get(DEAL_OFFER_MAKER_KEY, ""))
+        return active_team_member(state) or offer_maker_for_deal(state)
     except Exception:
         return ""
 
@@ -162,7 +180,7 @@ def render_team_member_selector(st: Any) -> str:
         left, right = st.columns([1.2, 1.8])
         with left:
             selected = st.selectbox(
-                "Who is making this offer?",
+                "Who is working this offer?",
                 options,
                 key=MEMBER_SELECTION_KEY,
                 help=(
@@ -195,10 +213,13 @@ def render_team_member_selector(st: Any) -> str:
         )
         state[ACTIVE_MEMBER_KEY] = name
         if name:
-            apply_active_member_to_deal(state)
-            st.success(f"Offers and team saves will use: {name}")
+            apply_active_member_to_deal(state, overwrite_offer_maker=False)
+            prior = offer_maker_for_deal(state)
+            if prior and prior.casefold() != name.casefold():
+                st.success(f"Current teammate: {name}. Existing offer on this saved deal: {prior}.")
+            else:
+                st.success(f"Offers, messages, and team saves will use: {name}")
         else:
-            state[DEAL_OFFER_MAKER_KEY] = ""
             st.warning(
                 "Select your name before calculating or sending an offer. The app will not default to another teammate."
             )
