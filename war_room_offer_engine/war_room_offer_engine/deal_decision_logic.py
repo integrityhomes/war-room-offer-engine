@@ -96,13 +96,36 @@ def _normalized_data(s: dict[str, Any]) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _state_value(s: dict[str, Any], key: str, default: Any = None) -> Any:
+    if key in s:
+        return s.get(key)
+    data = _normalized_data(s)
+    return data.get(key, default)
+
+
+def _bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "required", "on"}
+
+
+def _explicit_count(s: dict[str, Any], key: str) -> int | None:
+    if key in s or key in _normalized_data(s):
+        return int(number(_state_value(s, key)))
+    return None
+
+
 def rent_comp_count(s: dict[str, Any]) -> int:
+    verified = _explicit_count(s, "verified_rent_comp_count")
+    manual = int(number(s.get("manual_rent_comp_count")))
+    if verified is not None:
+        return max(verified, manual)
     data = _normalized_data(s)
     return max(
         int(number(s.get("rentcast_rent_comp_count"))),
         int(number(s.get("rentcast_comp_count"))),
         int(number(s.get("rent_comp_count"))),
-        int(number(s.get("manual_rent_comp_count"))),
+        manual,
         int(number(data.get("rent_comp_count"))),
         _list_count(s.get("rentcast_rent_comps")),
         _list_count(s.get("rent_comps")),
@@ -111,21 +134,29 @@ def rent_comp_count(s: dict[str, Any]) -> int:
 
 
 def rent_verified(s: dict[str, Any]) -> bool:
+    rent_value = number(s.get("rent") or _normalized_data(s).get("rent"))
+    if rent_value <= 0:
+        return False
+    if _bool_value(_state_value(s, "rent_requires_human_verification", False)):
+        return False
+
     count = rent_comp_count(s)
-    confidence = str(s.get("rent_confidence", "") or _normalized_data(s).get("rent_confidence", "")).lower()
+    verification_needed = str(_state_value(s, "rent_verification_needed", "Yes") or "Yes")
+    explicit_verified = _explicit_count(s, "verified_rent_comp_count")
+    if explicit_verified is not None:
+        return explicit_verified >= 3 and verification_needed != "Yes"
+
+    confidence = str(_state_value(s, "rent_confidence", "") or "").lower()
     has_verified_comps = count >= 3 or "strong" in confidence or "medium" in confidence
-    # A stale verification flag must not override actual RentCast comps returned in
-    # the same run. Three or more comparable rentals are treated as verified.
-    verification_needed = str(s.get("rent_verification_needed", "Yes"))
-    return number(s.get("rent") or _normalized_data(s).get("rent")) > 0 and has_verified_comps and (
-        verification_needed != "Yes" or count >= 3
-    )
+    return has_verified_comps and (verification_needed != "Yes" or count >= 3)
 
 
 def sold_count(s: dict[str, Any]) -> int:
+    verified = _explicit_count(s, "verified_sold_comp_count")
+    if verified is not None:
+        return verified
     data = _normalized_data(s)
     return max(
-        int(number(s.get("rentcast_value_comp_count"))),
         int(number(s.get("rentcast_sold_comp_count"))),
         int(number(s.get("auto_comp_count"))),
         int(number(data.get("rentcast_sold_comp_count"))),
@@ -190,9 +221,19 @@ def missing_items(s: dict[str, Any], strategy: str) -> list[str]:
     else:
         if number(s.get("arv")) <= 0:
             missing.append("ARV / value")
-        confidence = str(s.get("arv_confidence", "Not enough data")).lower()
-        if sold_count(s) < 1 and confidence in ["", "weak", "not enough data", "avm only"]:
-            missing.append("sold comps / verified ARV")
+        confidence = str(_state_value(s, "arv_confidence", "Not enough data") or "Not enough data").lower()
+        source = str(
+            s.get("arv_source_used")
+            or s.get("value_source")
+            or _normalized_data(s).get("arv_source")
+            or ""
+        ).lower()
+        listing_only = any(term in source for term in ["avm", "listing-based", "dates unverified"])
+        arv_review = _bool_value(_state_value(s, "arv_requires_human_verification", False))
+        if arv_review or (listing_only and sold_count(s) < 3) or (
+            sold_count(s) < 1 and confidence in ["", "weak", "not enough data", "avm only"]
+        ):
+            missing.append("verified ARV / recorded sold comps")
         if number(s.get("repairs")) <= 0 and str(s.get("repair_source", "Missing")) == "Missing" and not str(s.get("repair_notes", "")).strip():
             missing.append("repair scope")
     return list(dict.fromkeys(missing))
@@ -227,6 +268,37 @@ def evaluate(s: dict[str, Any], a: Any, engine: dict[str, Any], strategy: str) -
             "missing": missing, "review_flags": flags, "room_left": room, "seller_drop_needed": max(price - maximum, 0) if maximum > 0 else 0}
 
 
+def _lane_confidence(s: dict[str, Any], strategy: str, decision: str) -> str:
+    if decision == "HUMAN REVIEW":
+        return "Weak"
+
+    if is_slow(strategy):
+        if not rent_verified(s):
+            return "Weak"
+        count = rent_comp_count(s)
+        confidence = str(_state_value(s, "rent_confidence", "") or "").lower()
+        mode = str(_state_value(s, "rent_search_mode", "") or "").lower()
+        radius = number(_state_value(s, "rent_search_radius", 0))
+        local_scope = not mode or mode in {"local", "expanded"}
+        if "strong" in confidence and count >= 5 and local_scope and (radius <= 10 or radius <= 0):
+            return "Strong"
+        if count >= 3 and any(term in confidence for term in ["strong", "medium"]):
+            return "Medium"
+        return "Medium" if count >= 3 else "Weak"
+
+    if _bool_value(_state_value(s, "arv_requires_human_verification", False)):
+        return "Weak"
+    count = sold_count(s)
+    confidence = str(_state_value(s, "arv_confidence", "") or "").lower()
+    if count >= 3 and "strong" in confidence:
+        return "Strong"
+    if count >= 3 and any(term in confidence for term in ["strong", "medium", "manual"]):
+        return "Medium"
+    if count >= 1 and confidence not in {"", "weak", "avm only", "not enough data"}:
+        return "Medium"
+    return "Weak"
+
+
 def build_decision(s: dict[str, Any], a: Any, engine: dict[str, Any], selected: str) -> dict[str, Any]:
     rows = [evaluate(s, a, engine, x) for x in [SLOW_KEEP, SLOW_WHOLESALE, WHOLESALE_MLS, WHOLESALE_OFF_MARKET]]
     by_name = {row["strategy"]: row for row in rows}
@@ -240,7 +312,22 @@ def build_decision(s: dict[str, Any], a: Any, engine: dict[str, Any], selected: 
         priority = {SLOW_KEEP: 3, SLOW_WHOLESALE: 2, wholesale: 1}
         chosen = max(candidates, key=lambda r: (rank.get(r["decision"], 0), number(r["projected_margin"]), priority.get(r["strategy"], 0)))
     chosen = dict(chosen)
-    points = (2 if rent_verified(s) else 0) + (2 if sold_count(s) >= 3 else 1 if sold_count(s) else 0) + (1 if number(s.get("arv")) > 0 else 0) + (1 if not chosen["missing"] and not chosen["review_flags"] else 0)
-    chosen["confidence"] = "Weak" if chosen["decision"] == "HUMAN REVIEW" else "Strong" if points >= 5 else "Medium" if points >= 3 else "Weak"
+    confidence = _lane_confidence(s, chosen["strategy"], chosen["decision"])
+
+    # A BUY cannot be presented with weak exit evidence. Medium evidence may
+    # support a conditional BUY, but the next action must disclose the remaining
+    # verification instead of borrowing confidence from an unrelated deal lane.
+    if chosen["decision"] == "BUY" and confidence == "Weak":
+        chosen["decision"] = "HUMAN REVIEW"
+        chosen["reason"] = "The price may work, but the selected exit evidence is not strong enough for a clean BUY."
+        chosen["next_action"] = "Verify the selected exit evidence before committing."
+        confidence = "Weak"
+    elif chosen["decision"] == "BUY" and confidence == "Medium":
+        if is_slow(chosen["strategy"]):
+            chosen["next_action"] = "Confirm title, walkthrough condition, and local rental support before moving to contract."
+        else:
+            chosen["next_action"] = "Confirm title, repair scope, and recorded-sale condition before moving to contract."
+
+    chosen["confidence"] = confidence
     chosen["evaluations"] = rows
     return chosen

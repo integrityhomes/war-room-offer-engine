@@ -47,6 +47,7 @@ jobs:
             war_room_offer_engine/war_room_offer_engine/rentcast_intelligence_comps_ui_fix_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/rentcast_intelligence_rent_ui_fix_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/rentcast_intelligence_rent_reconciliation_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/rentcast_intelligence_mode_lock_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/rent_fallback_ui_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/rentcast_credit_guard_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/rentcast_comp_normalization_fix_smoke_test.py
@@ -54,6 +55,7 @@ jobs:
             war_room_offer_engine/war_room_offer_engine/address_rentcast_bridge_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/rentcast_state_bootstrap_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/deal_decision_logic_smoke_test.py
+            war_room_offer_engine/war_room_offer_engine/deal_decision_lane_confidence_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/single_section_workspace_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/deal_library_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/deal_library_preflight_smoke_test.py
