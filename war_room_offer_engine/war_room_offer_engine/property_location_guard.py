@@ -13,6 +13,30 @@ STATE_CODES = {
     "DC",
 }
 
+_STREET_ALIASES = {
+    "street": "st",
+    "avenue": "ave",
+    "road": "rd",
+    "drive": "dr",
+    "lane": "ln",
+    "court": "ct",
+    "boulevard": "blvd",
+    "place": "pl",
+    "parkway": "pkwy",
+    "highway": "hwy",
+    "terrace": "ter",
+    "circle": "cir",
+    "trail": "trl",
+    "way": "way",
+    "north": "n",
+    "south": "s",
+    "east": "e",
+    "west": "w",
+    "apartment": "apt",
+    "suite": "ste",
+    "unit": "unit",
+}
+
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -20,6 +44,11 @@ def _text(value: Any) -> str:
 
 def _normalized(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", _text(value).lower()).strip()
+
+
+def _normalized_street(value: Any) -> str:
+    tokens = _normalized(value).split()
+    return " ".join(_STREET_ALIASES.get(token, token) for token in tokens)
 
 
 def is_listing_url(value: Any) -> bool:
@@ -66,7 +95,16 @@ def parse_property_input(value: Any) -> dict[str, Any]:
         result["state"] = state_match.group(1).upper()
 
     parts = [part.strip() for part in raw.split(",") if part.strip()]
-    result["street"] = parts[0] if parts else raw
+    if parts:
+        result["street"] = parts[0]
+    else:
+        street = raw
+        if zip_match:
+            street = street[: zip_match.start()].strip(" ,")
+        if state_match and state_match.start() < len(street):
+            street = street[: state_match.start()].strip(" ,")
+        result["street"] = street
+
     if len(parts) >= 3:
         result["city"] = parts[-2]
     elif len(parts) == 2 and result["state"]:
@@ -99,13 +137,22 @@ def validate_resolved_location(
     requested: Any,
     resolved: dict[str, Any] | None,
 ) -> tuple[bool, str]:
-    """Verify that a returned property record matches the requested location."""
+    """Verify that a returned property record is the requested property."""
     parsed = parse_property_input(requested)
     if parsed.get("is_url"):
         return True, ""
     if not parsed.get("complete"):
         return False, _text(parsed.get("message"))
     resolved = resolved if isinstance(resolved, dict) else {}
+
+    expected_street = _normalized_street(parsed.get("street"))
+    resolved_street_value = " ".join(
+        part for part in [
+            _text(resolved.get("address")),
+            _text(resolved.get("address_line_2")),
+        ] if part
+    )
+    resolved_street = _normalized_street(resolved_street_value)
     resolved_state = _text(resolved.get("state")).upper()
     resolved_zip = re.sub(r"\D", "", _text(resolved.get("zip")))[:5]
     resolved_city = _normalized(resolved.get("city"))
@@ -114,6 +161,12 @@ def validate_resolved_location(
     expected_city = _normalized(parsed.get("city"))
 
     mismatches: list[str] = []
+    if expected_street and resolved_street and expected_street != resolved_street:
+        mismatches.append(
+            f"street {resolved_street_value or 'unavailable'} instead of {parsed.get('street')}"
+        )
+    elif expected_street and not resolved_street:
+        mismatches.append("street address unavailable in the returned subject record")
     if expected_state and resolved_state and expected_state != resolved_state:
         mismatches.append(f"state {resolved_state} instead of {expected_state}")
     if expected_zip and resolved_zip and expected_zip != resolved_zip:
@@ -124,14 +177,14 @@ def validate_resolved_location(
     if mismatches:
         resolved_address = _text(resolved.get("formatted_address")) or ", ".join(
             part for part in [
-                _text(resolved.get("address")),
+                resolved_street_value,
                 _text(resolved.get("city")),
                 _text(resolved.get("state")),
                 _text(resolved.get("zip")),
             ] if part
         )
         return False, (
-            "RentCast resolved the request to a different location"
+            "RentCast resolved the request to a different property or location"
             + (f" ({resolved_address})" if resolved_address else "")
             + ": "
             + "; ".join(mismatches)
