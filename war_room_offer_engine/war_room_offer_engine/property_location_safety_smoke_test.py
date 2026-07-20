@@ -23,24 +23,24 @@ assert "street, city, state" in message.lower()
 # Full city/state or a ZIP is sufficient to identify the requested geography.
 for address in [
     "404 4th St, Montgomery, AL",
-    "404 4th St, Montgomery, AL 36104",
+    "404 4th St, Montgomery, AL 36110",
     "1263 Allison Gap Rd, Saltville, VA 24370",
     "5500 Grand Lake Dr, San Antonio, TX 78244",
-    "404 4th St 36104",
+    "404 4th St 36110",
 ]:
     assert guard.validate_property_input(address)[0] is True, address
 
 assert guard.validate_property_input("https://www.zillow.com/homedetails/example")[0] is True
 
-parsed = guard.parse_property_input("404 4th St, Montgomery, AL 36104")
+parsed = guard.parse_property_input("404 4th St, Montgomery, AL 36110")
 assert parsed["city"] == "Montgomery"
 assert parsed["state"] == "AL"
-assert parsed["zip"] == "36104"
+assert parsed["zip"] == "36110"
 
 # The live failure resolved a Montgomery, Alabama street-only input to Idaho.
 # A full Montgomery address must reject that subject before rent/ARV searches.
 valid, mismatch = guard.validate_resolved_location(
-    "404 4th St, Montgomery, AL 36104",
+    "404 4th St, Montgomery, AL 36110",
     {
         "formatted_address": "404 4th St, Saint Maries, ID 83861",
         "address": "404 4th St",
@@ -54,13 +54,13 @@ assert "different location" in mismatch.lower()
 assert "id instead of al" in mismatch.lower()
 
 valid, mismatch = guard.validate_resolved_location(
-    "404 4th St, Montgomery, AL 36104",
+    "404 4th St, Montgomery, AL 36110",
     {
-        "formatted_address": "404 4th St, Montgomery, AL 36104",
+        "formatted_address": "404 4th St, Montgomery, AL 36110",
         "address": "404 4th St",
         "city": "Montgomery",
         "state": "AL",
-        "zip": "36104",
+        "zip": "36110",
     },
 )
 assert valid is True
