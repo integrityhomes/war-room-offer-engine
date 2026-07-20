@@ -147,20 +147,26 @@ credit_guard.install()
 location_safety.install_ui()
 
 try:
+    import data_sources as ds
     import one_load_sources as base
+    import property_location_guard as location_guard
     import zillow_url_import_safe as zillow_safe
     from data_sources import get_secret
     from rentcast_auto_enrichment import enrich_property_with_rentcast
     from zillow_score_patch import safe_score_zillow_row
 except ImportError:
     try:
+        from . import data_sources as ds
         from . import one_load_sources as base
+        from . import property_location_guard as location_guard
         from . import zillow_url_import_safe as zillow_safe
         from .data_sources import get_secret
         from .rentcast_auto_enrichment import enrich_property_with_rentcast
         from .zillow_score_patch import safe_score_zillow_row
     except ImportError:
+        from war_room_offer_engine import data_sources as ds
         from war_room_offer_engine import one_load_sources as base
+        from war_room_offer_engine import property_location_guard as location_guard
         from war_room_offer_engine import zillow_url_import_safe as zillow_safe
         from war_room_offer_engine.data_sources import get_secret
         from war_room_offer_engine.rentcast_auto_enrichment import enrich_property_with_rentcast
@@ -195,12 +201,89 @@ zillow_safe.pull_zillow_listing = pull_zillow_listing_with_rentcast
 base.pull_zillow_listing = pull_zillow_listing_with_rentcast
 
 
+def _plain_address_record(payload):
+    """Run the configured RentCast lookup for a paid One-Load address analysis.
+
+    The Deal Decision button previously normalized a plain address without ever
+    calling ``data_sources.lookup_rentcast``. Listing URLs were enriched, while a
+    complete typed address could fall straight through to the manual fallback
+    screen. The lookup is performed here because this function is only reached
+    from the explicit analysis action, and the existing location, confirmation,
+    duplicate-pull, cache, and request-budget guards are already active.
+    """
+    if not isinstance(payload, dict):
+        return {}, False
+    existing = payload.get("record")
+    if isinstance(existing, dict) and existing:
+        return dict(existing), False
+    if str(payload.get("listing_url", "") or "").strip():
+        return {}, False
+
+    address = str(payload.get("property_address", "") or "").strip()
+    complete, _ = location_guard.validate_property_input(address)
+    if not address or not complete:
+        return {}, False
+
+    try:
+        result = ds.lookup_rentcast(address, beds=0, baths=0, sqft=0)
+    except Exception as exc:
+        result = {
+            "source": "RentCast",
+            "found": False,
+            "address": address,
+            "rentcast_submitted_address": address,
+            "rent": 0,
+            "rent_comps": [],
+            "auto_sold_comps": [],
+            "rentcast_rent_error": f"RentCast One-Load lookup error: {exc}",
+        }
+    return (dict(result), True) if isinstance(result, dict) else ({}, True)
+
+
+def _append_unique(rows, value):
+    text = str(value or "").strip()
+    if not text:
+        return rows
+    result = list(rows or [])
+    if text not in result:
+        result.append(text)
+    return result
+
+
 def normalize_one_load_lead(payload):
-    summary = _original_normalize_one_load_lead(payload)
+    working = dict(payload or {}) if isinstance(payload, dict) else {}
+    record, attempted = _plain_address_record(working)
+    if attempted:
+        working["record"] = record
+
+    summary = _original_normalize_one_load_lead(working)
+    if not isinstance(summary, dict):
+        summary = {}
+
+    if attempted:
+        summary["rentcast_pull_attempted"] = True
+        summary["rentcast_pull_status"] = (
+            "Complete"
+            if record.get("rent") or record.get("rent_comps") or record.get("arv") or record.get("auto_sold_comps")
+            else "No usable RentCast result"
+        )
+        summary["data_sources_used"] = _append_unique(
+            summary.get("data_sources_used", []),
+            "RentCast verified intelligence" if preview_control.preview_enabled() else "RentCast basic data",
+        )
+        for key in (
+            "location_verification_error",
+            "rentcast_property_error",
+            "rentcast_rent_error",
+            "rentcast_value_error",
+        ):
+            if record.get(key):
+                summary["errors"] = _append_unique(summary.get("errors", []), record.get(key))
+
     if not preview_control.preview_enabled():
         return summary
-    record = payload.get("record", {}) if isinstance(payload, dict) and isinstance(payload.get("record", {}), dict) else {}
-    data = summary.get("data", {}) if isinstance(summary, dict) else {}
+
+    data = summary.get("data", {}) if isinstance(summary.get("data", {}), dict) else {}
     if record and isinstance(data, dict):
         intelligence_keys = set(property_intelligence.INTELLIGENCE_STATE_KEYS) | {
             preview_control.PREVIEW_ACTIVE_KEY,
@@ -216,6 +299,8 @@ def normalize_one_load_lead(payload):
             "auto_comp_radius", "auto_comp_date_range", "taxes", "tax_assessed_value",
             "last_sale_date", "last_sale_price", "county", "latitude", "longitude",
             "assessor_id", "subdivision", "zoning", "hoa_fee", "hoa_frequency",
+            "requested_property_address", "resolved_property_address", "location_verification_status",
+            "location_verification_failed", "location_verification_error",
         }
         for key in intelligence_keys:
             if key in record:
