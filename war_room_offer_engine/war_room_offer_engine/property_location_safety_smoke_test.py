@@ -13,6 +13,9 @@ for path in [str(APP_DIR), str(APP_DIR.parent), str(APP_DIR.parent.parent)]:
 
 guard = importlib.import_module("property_location_guard")
 safety = importlib.import_module("property_location_safety")
+decision_guard = importlib.import_module("property_location_decision_guard")
+decision_logic = importlib.import_module("deal_decision_logic")
+decision_guard.install()
 
 
 # Street-only inputs are ambiguous and must be stopped before a paid request.
@@ -118,5 +121,62 @@ assert invalid["verified_sold_comp_count"] == 0
 assert invalid["verified_rent_comp_count"] == 0
 assert invalid["arv_requires_human_verification"] is True
 assert invalid["rent_requires_human_verification"] is True
+
+# Even strong-looking rent numbers cannot produce a clean BUY when the address is
+# incomplete or the subject record failed exact-location verification.
+assumptions = {
+    "min_assignment_fee": 10000,
+    "exception_assignment_fee": 5000,
+    "slow_flip_rent_multiple": 45,
+    "close_title_buffer": 1500,
+    "slow_flip_max_offer_cap": 32000,
+    "slow_flip_first_offer_gap": 4000,
+    "slow_flip_max_buy_price": 50000,
+}
+engine = {"wholesale": {"buyer_target": 0, "max_offer": 0, "first_offer": 0, "offer_to_send": 0}}
+base_state = {
+    "decision_strategy": decision_logic.SLOW_KEEP,
+    "decision_current_negotiated_price": 29900,
+    "rent": 1400,
+    "verified_rent_comp_count": 10,
+    "rent_confidence": "Strong verified rent comps",
+    "rent_verification_needed": "No",
+    "rent_search_mode": "Local",
+    "rent_search_radius": 5,
+}
+
+incomplete_decision = decision_logic.build_decision(
+    {**base_state, "decision_property_input": "404 4th St"},
+    assumptions,
+    engine,
+    decision_logic.SLOW_KEEP,
+)
+assert incomplete_decision["decision"] == "HUMAN REVIEW"
+assert "complete property location" in incomplete_decision["missing"]
+
+mismatch_decision = decision_logic.build_decision(
+    {
+        **base_state,
+        "decision_property_input": "404 4th St, Montgomery, AL 36110",
+        "location_verification_failed": True,
+    },
+    assumptions,
+    engine,
+    decision_logic.SLOW_KEEP,
+)
+assert mismatch_decision["decision"] == "HUMAN REVIEW"
+assert "verified property location" in mismatch_decision["missing"]
+
+matching_decision = decision_logic.build_decision(
+    {
+        **base_state,
+        "decision_property_input": "404 4th St, Montgomery, AL 36110",
+        "location_verification_failed": False,
+    },
+    assumptions,
+    engine,
+    decision_logic.SLOW_KEEP,
+)
+assert matching_decision["decision"] == "BUY"
 
 print("Property location safety smoke test passed.")
