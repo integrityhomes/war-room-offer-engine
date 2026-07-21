@@ -183,3 +183,16 @@ def install_workspace() -> bool:
 
 
 install_workspace()
+
+# Install the stability layer through a title hook. The hook runs after every
+# existing RentCast, location, credit, and team-identity wrapper has loaded, so
+# it can safely guard the final production path instead of bypassing a safeguard.
+try:
+    import app_stability_guard as _stability_guard
+except ImportError:
+    try:
+        from . import app_stability_guard as _stability_guard
+    except ImportError:
+        from war_room_offer_engine import app_stability_guard as _stability_guard
+
+_stability_guard.install_title_hook()
