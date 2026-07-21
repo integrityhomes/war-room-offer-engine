@@ -55,12 +55,42 @@ def missing_items_with_location(
 def _install_stability_base() -> bool:
     try:
         import app_stability as stability
+        import property_location_safety as location_safety
+        import rentcast_credit_guard as credit_guard
     except ImportError:
         try:
             from . import app_stability as stability
+            from . import property_location_safety as location_safety
+            from . import rentcast_credit_guard as credit_guard
         except ImportError:
             from war_room_offer_engine import app_stability as stability
-    return bool(stability.install_base())
+            from war_room_offer_engine import property_location_safety as location_safety
+            from war_room_offer_engine import rentcast_credit_guard as credit_guard
+
+    stability.install_base()
+
+    # property_location_safety imports the credit module before this guard loads,
+    # so the credit module may have captured the old Deal Decision render even
+    # though its install() has not run yet. Point that pending wrapper at the new
+    # stable render before the request-counting guard is installed.
+    if not getattr(credit_guard.records, "_rentcast_credit_guard_installed", False):
+        credit_guard._ORIGINAL_DECISION_RENDER = stability.render_stable_operator_workflow
+        credit_guard.decision_ui.render = stability.render_stable_operator_workflow
+
+    # The location-aware credit panel is installed later in one_load_sources_safe.
+    # Wrap that installation once so the final compact panel is applied only after
+    # both the request guard and location guard have completed their wiring.
+    if not getattr(location_safety, "_app_stability_post_guard_hook", False):
+        original_install_ui = location_safety.install_ui
+
+        def install_ui_with_stability() -> bool:
+            result = original_install_ui()
+            stability.install_post_guards()
+            return bool(result)
+
+        location_safety.install_ui = install_ui_with_stability
+        location_safety._app_stability_post_guard_hook = True
+    return True
 
 
 def install() -> bool:
