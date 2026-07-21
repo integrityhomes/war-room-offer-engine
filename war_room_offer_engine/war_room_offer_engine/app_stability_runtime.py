@@ -12,6 +12,11 @@ except ImportError:
 
 
 _EMPTY = [None, "", 0, 0.0, [], {}]
+_ORIGINAL_INSTALL_BASE = getattr(
+    stability,
+    "_runtime_original_install_base",
+    stability.install_base,
+)
 
 
 def state_value_with_normalized_fallback(
@@ -68,7 +73,16 @@ def analysis_evidence_present_without_demo_defaults(state: Any) -> bool:
     return bool(rent_provenance or arv_provenance)
 
 
+def install_base_once() -> bool:
+    """Install the stable base once without later overwriting credit/team wrappers."""
+    if getattr(stability.decision_ui, "_app_stability_base_installed", False):
+        return True
+    return bool(_ORIGINAL_INSTALL_BASE())
+
+
 def install() -> bool:
+    stability._runtime_original_install_base = _ORIGINAL_INSTALL_BASE
+    stability.install_base = install_base_once
     stability._state_value = state_value_with_normalized_fallback
     stability._analysis_evidence_present = analysis_evidence_present_without_demo_defaults
     return True
