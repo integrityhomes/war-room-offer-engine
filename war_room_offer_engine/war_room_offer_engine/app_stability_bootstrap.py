@@ -65,6 +65,14 @@ def install_runtime_composition(st: Any = None) -> bool:
         team_offer,
     ) = _load_modules()
 
+    # app_stability is imported after the team wrapper already exists, so its
+    # initial library capture would otherwise point back to the team wrapper and
+    # create recursion: team -> compact -> team. Re-anchor the compact library to
+    # the unwrapped full library renderer captured by the team module.
+    base_library_render = getattr(team_offer, "_ORIGINAL_LIBRARY_RENDER", None)
+    if callable(base_library_render):
+        stability._ORIGINAL_LIBRARY_RENDER = base_library_render
+
     stability_runtime.install()
     stability.install_base()
     stability.install_post_guards()
@@ -83,7 +91,6 @@ def install_runtime_composition(st: Any = None) -> bool:
     library_ui.render_deal_library_box = team_offer.render_deal_library_with_identity
     decision_ui.render_deal_library_box = team_offer.render_deal_library_with_identity
 
-    stability.render_compact_credit_panel  # keep explicit reference for audits
     location_safety.render_credit_panel_with_location_guard = stability.render_compact_credit_panel
     credit_guard.render_credit_panel = stability.render_compact_credit_panel
 
