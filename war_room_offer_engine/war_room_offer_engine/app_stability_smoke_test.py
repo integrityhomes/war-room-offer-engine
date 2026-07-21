@@ -4,6 +4,7 @@ import importlib
 import inspect
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -14,6 +15,7 @@ for path in [str(APP_DIR), str(APP_DIR.parent), str(APP_DIR.parent.parent)]:
 
 stability = importlib.import_module("app_stability")
 stability_runtime = importlib.import_module("app_stability_runtime")
+bootstrap = importlib.import_module("app_stability_bootstrap")
 identity = importlib.import_module("team_offer_identity")
 preview = importlib.import_module("rentcast_intelligence_preview")
 one_load = importlib.import_module("ui_sections.one_load_deal_ui")
@@ -202,5 +204,26 @@ assert inspect.getsource(stability.render_compact_library).count("expanded=False
 assert "Use verified RentCast intelligence (recommended)" in inspect.getsource(
     stability.render_compact_verified_control
 )
+
+
+# Runtime composition must preserve the exact safety order:
+# stable app -> credit guard -> team identity. The collapsed Deal Library must
+# retain the team audit wrapper without recursively calling itself.
+fake_st = SimpleNamespace(session_state=FakeState())
+bootstrap.install_runtime_composition(fake_st)
+decision_ui = importlib.import_module("deal_decision_ui")
+credit_guard = importlib.import_module("rentcast_credit_guard")
+team_offer = importlib.import_module("team_offer_integration")
+location_safety = importlib.import_module("property_location_safety")
+library_ui = importlib.import_module("deal_library_ui")
+assert decision_ui.render is team_offer.render_decision_with_team_identity
+assert team_offer._ORIGINAL_DECISION_RENDER is credit_guard.render_with_credit_guard
+assert credit_guard._ORIGINAL_DECISION_RENDER is stability.render_stable_operator_workflow
+assert team_offer._ORIGINAL_LIBRARY_RENDER is stability.render_compact_library
+assert stability._ORIGINAL_LIBRARY_RENDER is not team_offer.render_deal_library_with_identity
+assert stability._ORIGINAL_LIBRARY_RENDER is not stability.render_compact_library
+assert library_ui.render_deal_library_box is team_offer.render_deal_library_with_identity
+assert credit_guard.render_credit_panel is stability.render_compact_credit_panel
+assert location_safety.render_credit_panel_with_location_guard is stability.render_compact_credit_panel
 
 print("Stability-first operator workflow smoke test passed.")
