@@ -55,19 +55,23 @@ def missing_items_with_location(
 def _install_stability_base() -> bool:
     try:
         import app_stability as stability
+        import app_stability_runtime as stability_runtime
         import property_location_safety as location_safety
         import rentcast_credit_guard as credit_guard
     except ImportError:
         try:
             from . import app_stability as stability
+            from . import app_stability_runtime as stability_runtime
             from . import property_location_safety as location_safety
             from . import rentcast_credit_guard as credit_guard
         except ImportError:
             from war_room_offer_engine import app_stability as stability
+            from war_room_offer_engine import app_stability_runtime as stability_runtime
             from war_room_offer_engine import property_location_safety as location_safety
             from war_room_offer_engine import rentcast_credit_guard as credit_guard
 
     stability.install_base()
+    stability_runtime.install()
 
     # property_location_safety imports the credit module before this guard loads,
     # so the credit module may have captured the old Deal Decision render even
