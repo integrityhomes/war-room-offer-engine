@@ -13,6 +13,7 @@ for path in [str(APP_DIR), str(APP_DIR.parent), str(APP_DIR.parent.parent)]:
 
 
 stability = importlib.import_module("app_stability")
+stability_runtime = importlib.import_module("app_stability_runtime")
 identity = importlib.import_module("team_offer_identity")
 preview = importlib.import_module("rentcast_intelligence_preview")
 one_load = importlib.import_module("ui_sections.one_load_deal_ui")
@@ -25,6 +26,7 @@ class FakeState(dict):
 # Stability installation removes demo defaults at their source while retaining
 # the historical demo-value detector for backward-compatible imports.
 stability.install_base()
+stability_runtime.install()
 assert one_load.ONE_LOAD_DEFAULTS["asking_price"] == 0
 assert one_load.ONE_LOAD_DEFAULTS["rent"] == 0
 assert one_load.ONE_LOAD_DEFAULTS["beds"] == 0.0
