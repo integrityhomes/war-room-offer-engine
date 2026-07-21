@@ -158,6 +158,19 @@ except ImportError:
 
 team_offer.install()
 
+# The stability layer is deliberately last. It owns the final reset, stale-result,
+# demo-default, success-message, and accuracy-first UI contract while preserving
+# every location, credit, intelligence, and team-identity safeguard installed above.
+try:
+    import production_stability as stability  # noqa: F401
+except ImportError:
+    try:
+        from . import production_stability as stability  # noqa: F401
+    except ImportError:
+        from war_room_offer_engine import production_stability as stability  # noqa: F401
+
+stability.install()
+
 try:
     import data_sources as ds
     import one_load_sources as base
