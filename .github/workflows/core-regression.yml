@@ -42,6 +42,7 @@ jobs:
         shell: bash
         run: |
           tests=(
+            war_room_offer_engine/war_room_offer_engine/production_stability_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/team_offer_identity_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/team_offer_outreach_smoke_test.py
             war_room_offer_engine/war_room_offer_engine/property_location_safety_smoke_test.py
