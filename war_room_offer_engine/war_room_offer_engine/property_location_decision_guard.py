@@ -52,12 +52,26 @@ def missing_items_with_location(
     return list(dict.fromkeys(missing))
 
 
+def _install_stability_base() -> bool:
+    try:
+        import app_stability as stability
+    except ImportError:
+        try:
+            from . import app_stability as stability
+        except ImportError:
+            from war_room_offer_engine import app_stability as stability
+    return bool(stability.install_base())
+
+
 def install() -> bool:
-    if getattr(logic, "_property_location_decision_guard_installed", False):
-        return True
-    logic._property_location_original_missing_items = _ORIGINAL_MISSING_ITEMS
-    logic.missing_items = missing_items_with_location
-    logic._property_location_decision_guard_installed = True
+    if not getattr(logic, "_property_location_decision_guard_installed", False):
+        logic._property_location_original_missing_items = _ORIGINAL_MISSING_ITEMS
+        logic.missing_items = missing_items_with_location
+        logic._property_location_decision_guard_installed = True
+    # This module is loaded after verified-intelligence dispatch and before the
+    # request-counting and team-identity wrappers. Installing the stable base UI
+    # here gives every later safety wrapper one clean render target.
+    _install_stability_base()
     return True
 
 
