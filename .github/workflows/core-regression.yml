@@ -39,6 +39,7 @@ jobs:
         run: python -m compileall -q war_room_offer_engine/war_room_offer_engine
 
       - name: Run stability-first workflow regression
+        id: stability
         shell: bash
         run: |
           set +e
@@ -46,6 +47,15 @@ jobs:
           status=$?
           cat /tmp/stability-test.log
           exit $status
+
+      - name: Upload stability diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stability-test-log
+          path: /tmp/stability-test.log
+          if-no-files-found: warn
+          retention-days: 2
 
       - name: Run existing focused regression suite
         shell: bash
