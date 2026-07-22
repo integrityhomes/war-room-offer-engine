@@ -51,6 +51,37 @@ assert state["deal_library_assigned_to"] == "Acquisitions Queue"
 assert identity.apply_active_member_to_deal(state, overwrite_offer_maker=True) is True
 assert state[identity.DEAL_OFFER_MAKER_KEY] == "Bob Smith"
 
+
+class LockedWidgetState(dict):
+    """Model Streamlit refusing writes after keyed widgets are instantiated."""
+
+    locked_keys = {"deal_library_updated_by", "deal_library_assigned_to"}
+
+    def __setitem__(self, key, value):
+        if key in self.locked_keys:
+            raise RuntimeError(
+                f"st.session_state.{key} cannot be modified after the widget with key {key} is instantiated."
+            )
+        return super().__setitem__(key, value)
+
+
+# Clicking Save / Update happens after Updated By and Assigned To widgets exist.
+# Audit attribution must still reach the snapshot data without crashing the app.
+locked = LockedWidgetState(
+    {
+        identity.ACTIVE_MEMBER_KEY: "Taylor Reed",
+        identity.DEAL_OFFER_MAKER_KEY: "Original Buyer",
+        "deal_library_updated_by": "Taylor Reed",
+        "deal_library_assigned_to": "",
+        "one_load_normalized": {"data": {}},
+    }
+)
+assert identity.apply_active_member_to_deal(locked, overwrite_offer_maker=False) is True
+assert locked[identity.DEAL_OFFER_MAKER_KEY] == "Original Buyer"
+assert locked["decision_offer_made_by"] == "Original Buyer"
+assert locked["one_load_normalized"]["data"]["updated_by"] == "Taylor Reed"
+assert locked["one_load_normalized"]["data"]["offer_made_by"] == "Original Buyer"
+
 missing = {}
 identity.initialize_state(missing)
 assert identity.apply_active_member_to_deal(missing) is False
