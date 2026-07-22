@@ -30,40 +30,85 @@ def request_reset(st: Any) -> None:
 
 
 def apply_pending_reset(st: Any, reset_fn: Callable[[Any], None]) -> bool:
-    """Execute a scheduled reset before the next rerun creates any widgets."""
+    """Execute a scheduled reset at the next safe render boundary."""
     if not st.session_state.pop(PENDING_RESET_KEY, False):
         return False
     reset_fn(st)
     return True
 
 
+def clear_property_state_without_rewriting_preferences(
+    state: Any,
+    *,
+    preserve_current_inputs: bool,
+) -> list[str]:
+    """Clear property evidence while leaving preserved widget keys untouched.
+
+    Stability v1 already skipped session-preference keys while removing property
+    data, but then redundantly wrote those saved values back. Some preferences,
+    especially the active workspace selector, are instantiated before the Deal
+    Decision Center renders. Streamlit therefore rejects the redundant assignment.
+
+    Preserving a value only requires not deleting it. This implementation never
+    rewrites teammate, workspace, search, auto-save, or verified-mode preferences.
+    It also leaves current property/price inputs untouched during an automatic
+    cross-property cleanup.
+    """
+    stability = _load_stability()
+    if not hasattr(state, "get"):
+        return []
+
+    preserve = set(stability._SESSION_PREFERENCE_KEYS)
+    if preserve_current_inputs:
+        preserve.update(stability._CURRENT_INPUT_KEYS)
+
+    removed: list[str] = []
+    for key in list(state.keys()):
+        if key in preserve:
+            continue
+        if stability._is_property_state_key(key):
+            state.pop(key, None)
+            removed.append(str(key))
+    return removed
+
+
+def reset_property_without_rewriting_preferences(st: Any) -> None:
+    """Run the complete property reset without assigning preserved widget keys."""
+    stability = _load_stability()
+    stability._ORIGINAL_RESET(st)
+    clear_property_state_without_rewriting_preferences(
+        st.session_state,
+        preserve_current_inputs=False,
+    )
+
+
 def install_runtime_patch() -> bool:
-    """Move the real reset to the next rerun, before any widgets are created."""
+    """Move reset to the next rerun and remove every redundant preference write."""
     stability = _load_stability()
     if getattr(stability, _PATCH_FLAG, False):
         stability._patch_loaded_aliases()
         return True
 
-    original_reset = stability.reset_with_stability
     original_render = stability.render_with_stability
 
     def reset_after_rerun(st: Any) -> None:
         request_reset(st)
 
-    def render_with_pre_widget_reset(
+    def render_with_safe_pending_reset(
         st: Any,
         ui: Any,
         original_renderer: Callable,
         exit_mode_value: str = "Auto",
     ) -> Any:
-        # This runs at the start of a fresh rerun, before Deal Decision, team
-        # identity, or Deal Library widgets are instantiated. Stability v1 can
-        # therefore clear and restore all property/session fields safely.
-        apply_pending_reset(st, original_reset)
+        # Other app controls, including the workspace selector, may already exist
+        # on this rerun. The safe reset deletes property keys only and never writes
+        # preserved widget values, so it remains valid at this render boundary.
+        apply_pending_reset(st, reset_property_without_rewriting_preferences)
         return original_render(st, ui, original_renderer, exit_mode_value)
 
+    stability.clear_property_state = clear_property_state_without_rewriting_preferences
     stability.reset_with_stability = reset_after_rerun
-    stability.render_with_stability = render_with_pre_widget_reset
+    stability.render_with_stability = render_with_safe_pending_reset
     stability._patch_loaded_aliases()
     setattr(stability, _PATCH_FLAG, True)
     return True
