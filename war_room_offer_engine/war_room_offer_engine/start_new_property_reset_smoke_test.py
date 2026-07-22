@@ -39,12 +39,19 @@ class FakeSt:
         self.session_state = state
 
 
+hotfix.install_runtime_patch()
+assert stability.clear_property_state is hotfix.clear_property_state_without_rewriting_preferences
+assert decision_ui._reset is stability.reset_with_stability
+assert decision_ui.render is stability.render_with_stability
+
 state = LockedState(
     {
         identity.ACTIVE_MEMBER_KEY: "Shawn",
         identity.MEMBER_SELECTION_KEY: "Shawn",
         identity.CUSTOM_MEMBER_KEY: "",
         preview.PREVIEW_STATE_KEY: True,
+        "war_room_active_section": "One-Load Deal",
+        "deal_library_auto_save": True,
         "decision_property_input": "404 4th St, Montgomery, AL 36110",
         "decision_strategy": "Auto — Choose Best",
         "decision_asking_price": 37000,
@@ -59,15 +66,16 @@ state = LockedState(
 )
 st = FakeSt(state)
 
-# This is the exact moment that previously crashed: the button is handled after
-# the keyed widgets already exist. The patched reset may write only its non-widget
-# pending flag during this run.
+# This is the exact button-click moment: every visible keyed widget is locked. The
+# patched reset may write only its non-widget pending flag during this run.
 state.locked.update(
     {
         identity.ACTIVE_MEMBER_KEY,
         identity.MEMBER_SELECTION_KEY,
         identity.CUSTOM_MEMBER_KEY,
         preview.PREVIEW_STATE_KEY,
+        "war_room_active_section",
+        "deal_library_auto_save",
         "decision_property_input",
         "decision_strategy",
         "decision_asking_price",
@@ -78,15 +86,27 @@ assert state[hotfix.PENDING_RESET_KEY] is True
 assert state["decision_property_input"] == "404 4th St, Montgomery, AL 36110"
 assert state[identity.ACTIVE_MEMBER_KEY] == "Shawn"
 
-# At the beginning of the next rerun no widgets are locked. The original stable
-# reset now clears property evidence and keeps the browser-session teammate.
-state.locked.clear()
-immediate_reset = stability.reset_with_stability
-assert hotfix.apply_pending_reset(st, immediate_reset) is True
+# On the next rerun the workspace selector and other global controls may already
+# be instantiated before the Deal Decision Center. Keep those preference keys
+# locked and prove the real reset does not rewrite them.
+state.locked = {
+    identity.ACTIVE_MEMBER_KEY,
+    identity.MEMBER_SELECTION_KEY,
+    identity.CUSTOM_MEMBER_KEY,
+    preview.PREVIEW_STATE_KEY,
+    "war_room_active_section",
+    "deal_library_auto_save",
+}
+assert hotfix.apply_pending_reset(
+    st,
+    hotfix.reset_property_without_rewriting_preferences,
+) is True
 assert hotfix.PENDING_RESET_KEY not in state
 assert state[identity.ACTIVE_MEMBER_KEY] == "Shawn"
 assert state[identity.MEMBER_SELECTION_KEY] == "Shawn"
 assert state[preview.PREVIEW_STATE_KEY] is True
+assert state["war_room_active_section"] == "One-Load Deal"
+assert state["deal_library_auto_save"] is True
 assert "decision_property_input" not in state
 assert "decision_asking_price" not in state
 assert "rentcast_rent_comps" not in state
@@ -95,17 +115,53 @@ assert "decision_result" not in state
 assert "deal_library_deal_id" not in state
 assert identity.DEAL_OFFER_MAKER_KEY not in state
 
-# Runtime installation must leave the deferred functions as the final aliases used
-# by the Deal Decision Center.
-hotfix.install_runtime_patch()
-assert decision_ui._reset is stability.reset_with_stability
-assert decision_ui.render is stability.render_with_stability
-
-second = LockedState(
+# Automatic cross-property cleanup runs after the current input widgets exist.
+# It must preserve those input values by skipping them, never by reassigning them.
+cross_property = LockedState(
     {
         identity.ACTIVE_MEMBER_KEY: "Sabrina",
         identity.MEMBER_SELECTION_KEY: "Sabrina",
+        preview.PREVIEW_STATE_KEY: True,
+        "war_room_active_section": "One-Load Deal",
         "decision_property_input": "1263 Allison Gap Rd, Saltville, VA 24370",
+        "decision_strategy": "Slow Flip — Keep",
+        "decision_asking_price": 32000,
+        "rent": 1050,
+        "rentcast_rent_comps": [{"rent": 1050}],
+        "decision_result": {"decision": "BUY"},
+        "deal_library_deal_id": "prior-property",
+    }
+)
+cross_property.locked.update(
+    {
+        identity.ACTIVE_MEMBER_KEY,
+        identity.MEMBER_SELECTION_KEY,
+        preview.PREVIEW_STATE_KEY,
+        "war_room_active_section",
+        "decision_property_input",
+        "decision_strategy",
+        "decision_asking_price",
+    }
+)
+removed = hotfix.clear_property_state_without_rewriting_preferences(
+    cross_property,
+    preserve_current_inputs=True,
+)
+assert removed
+assert cross_property[identity.ACTIVE_MEMBER_KEY] == "Sabrina"
+assert cross_property["decision_property_input"] == "1263 Allison Gap Rd, Saltville, VA 24370"
+assert cross_property["decision_strategy"] == "Slow Flip — Keep"
+assert cross_property["decision_asking_price"] == 32000
+assert "rentcast_rent_comps" not in cross_property
+assert "decision_result" not in cross_property
+assert "deal_library_deal_id" not in cross_property
+
+# The public reset alias still schedules rather than mutating visible widget keys.
+second = LockedState(
+    {
+        identity.ACTIVE_MEMBER_KEY: "Carlos",
+        identity.MEMBER_SELECTION_KEY: "Carlos",
+        "decision_property_input": "101 Test St, Decatur, IL 62521",
     }
 )
 second.locked.update(
@@ -117,7 +173,7 @@ second.locked.update(
 )
 stability.reset_with_stability(FakeSt(second))
 assert second[hotfix.PENDING_RESET_KEY] is True
-assert second[identity.ACTIVE_MEMBER_KEY] == "Sabrina"
-assert second["decision_property_input"] == "1263 Allison Gap Rd, Saltville, VA 24370"
+assert second[identity.ACTIVE_MEMBER_KEY] == "Carlos"
+assert second["decision_property_input"] == "101 Test St, Decatur, IL 62521"
 
-print("Start New Property deferred reset smoke test passed.")
+print("Start New Property preserved-widget reset smoke test passed.")
