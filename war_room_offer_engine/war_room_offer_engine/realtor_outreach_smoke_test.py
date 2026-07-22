@@ -65,7 +65,11 @@ outreach = module.build_first_touch_outreach(
 )
 check("$28,000" in outreach["text"], "first-touch text includes the opening offer")
 check("purchase as-is" in outreach["text"], "first-touch text includes as-is language")
-check("subject to confirming title" in outreach["email_body"], "email keeps verification protection")
+email_body = str(outreach["email_body"] or "").lower()
+check(
+    "contingent" in email_body and "title" in email_body,
+    "email keeps title-verification protection",
+)
 check("$28,000" in outreach["email_subject"], "email subject includes the offer")
 
 master_fields = module.build_master_feed_fields(
