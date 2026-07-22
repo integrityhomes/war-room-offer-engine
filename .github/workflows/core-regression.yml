@@ -44,20 +44,60 @@ jobs:
           set -euo pipefail
 
           test_root="war_room_offer_engine/war_room_offer_engine"
+          results_file="smoke-test-results.txt"
+          logs_dir="smoke-test-logs"
+          mkdir -p "$logs_dir"
+          : > "$results_file"
+
           mapfile -d '' tests < <(
             find "$test_root" -type f -name '*_smoke_test.py' -print0 | sort -z
           )
 
           if (( ${#tests[@]} == 0 )); then
-            echo "ERROR: No smoke tests were discovered under $test_root."
+            echo "ERROR: No smoke tests were discovered under $test_root." | tee -a "$results_file"
             exit 1
           fi
 
-          echo "Discovered ${#tests[@]} smoke test(s):"
-          printf '  %s\n' "${tests[@]}"
+          echo "Discovered ${#tests[@]} smoke test(s)." | tee -a "$results_file"
+          printf '  %s\n' "${tests[@]}" | tee -a "$results_file"
+          echo | tee -a "$results_file"
 
+          failures=0
           for test_file in "${tests[@]}"; do
+            relative_path="${test_file#"$test_root"/}"
+            log_name="${relative_path//\//__}.log"
+
             echo "::group::Running $test_file"
-            python "$test_file"
+            set +e
+            python "$test_file" 2>&1 | tee "$logs_dir/$log_name"
+            status=${PIPESTATUS[0]}
+            set -e
             echo "::endgroup::"
+
+            if (( status == 0 )); then
+              echo "PASS  $test_file" | tee -a "$results_file"
+            else
+              echo "FAIL  $test_file (exit $status)" | tee -a "$results_file"
+              failures=$((failures + 1))
+            fi
           done
+
+          echo | tee -a "$results_file"
+          echo "Total: ${#tests[@]} | Failed: $failures" | tee -a "$results_file"
+          cat "$results_file" >> "$GITHUB_STEP_SUMMARY"
+
+          if (( failures > 0 )); then
+            echo "ERROR: $failures smoke test(s) failed. See the uploaded smoke-test-results artifact."
+            exit 1
+          fi
+
+      - name: Upload smoke-test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-results
+          path: |
+            smoke-test-results.txt
+            smoke-test-logs/
+          if-no-files-found: error
+          retention-days: 14
