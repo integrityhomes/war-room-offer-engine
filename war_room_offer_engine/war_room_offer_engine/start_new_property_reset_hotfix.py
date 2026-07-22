@@ -29,6 +29,14 @@ def request_reset(st: Any) -> None:
     st.session_state[PENDING_RESET_KEY] = True
 
 
+def apply_pending_reset(st: Any, reset_fn: Callable[[Any], None]) -> bool:
+    """Execute a scheduled reset before the next rerun creates any widgets."""
+    if not st.session_state.pop(PENDING_RESET_KEY, False):
+        return False
+    reset_fn(st)
+    return True
+
+
 def install_runtime_patch() -> bool:
     """Move the real reset to the next rerun, before any widgets are created."""
     stability = _load_stability()
@@ -48,12 +56,10 @@ def install_runtime_patch() -> bool:
         original_renderer: Callable,
         exit_mode_value: str = "Auto",
     ) -> Any:
-        if st.session_state.pop(PENDING_RESET_KEY, False):
-            # This now runs at the start of a fresh rerun, before Deal Decision,
-            # team identity, or Deal Library widgets are instantiated. The
-            # existing Stability v1 reset can therefore clear and restore all
-            # property/session fields without violating Streamlit widget rules.
-            original_reset(st)
+        # This runs at the start of a fresh rerun, before Deal Decision, team
+        # identity, or Deal Library widgets are instantiated. Stability v1 can
+        # therefore clear and restore all property/session fields safely.
+        apply_pending_reset(st, original_reset)
         return original_render(st, ui, original_renderer, exit_mode_value)
 
     stability.reset_with_stability = reset_after_rerun
