@@ -9,9 +9,10 @@ import requests
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent.parent
-for path in [str(APP_DIR), str(APP_DIR.parent), str(REPO_ROOT)]:
-    if path not in sys.path:
-        sys.path.insert(0, path)
+for path in [str(REPO_ROOT), str(APP_DIR.parent), str(APP_DIR)]:
+    if path in sys.path:
+        sys.path.remove(path)
+    sys.path.insert(0, path)
 
 
 security = importlib.import_module("secret_transport_hardening")
