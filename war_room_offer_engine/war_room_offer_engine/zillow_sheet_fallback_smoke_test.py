@@ -69,12 +69,12 @@ try:
     check(len(record["listing_photos"]) == 2, "newline photo_all maps into a photo gallery")
 
     module.pd.read_csv = lambda url: pd.DataFrame([{"zpid": "99999999", "url": "https://www.zillow.com/other"}])
-    failed = False
-    try:
-        module.pull_zillow_listing(zillow_url)
-    except RuntimeError as exc:
-        failed = "analysis was stopped" in str(exc)
-    check(failed, "import failure stops analysis instead of using defaults")
+    failed_result = module.pull_zillow_listing(zillow_url)
+    check(not failed_result.get("ok"), "import failure returns an unsuccessful result in offline tests")
+    check(
+        "analysis was stopped" in str(failed_result.get("error") or ""),
+        "import failure stops analysis instead of using defaults",
+    )
 finally:
     module.base._configured_result = original_configured
     module.base.get_secret = original_get_secret
