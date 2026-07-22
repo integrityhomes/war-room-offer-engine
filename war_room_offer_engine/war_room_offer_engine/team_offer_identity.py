@@ -100,6 +100,30 @@ def offer_maker_for_deal(state: Any) -> str:
     return clean_name(state.get(DEAL_OFFER_MAKER_KEY, ""))
 
 
+def _safe_widget_state_write(state: Any, key: str, value: Any) -> bool:
+    """Write a widget-backed value only when Streamlit still permits it.
+
+    Streamlit forbids changing ``session_state[key]`` after a widget using the
+    same key has been instantiated during the current rerun. The Deal Library
+    save button is rendered after the Assigned To and Updated By widgets, so a
+    save-time audit stamp must never crash the whole application. The snapshot
+    builder independently records the active teammate as ``updated_by``.
+    """
+    try:
+        state[key] = value
+        return True
+    except Exception as exc:
+        message = str(exc).lower()
+        widget_locked = (
+            "cannot be modified after the widget" in message
+            or "cannot be modified after the widget with key" in message
+            or "streamlitapiexception" in type(exc).__name__.lower()
+        )
+        if widget_locked:
+            return False
+        raise
+
+
 def apply_active_member_to_deal(
     state: Any,
     *,
@@ -109,8 +133,8 @@ def apply_active_member_to_deal(
 
     The active operator is session-specific and is intentionally not restored from
     another teammate's saved deal. ``updated_by`` always reflects the current
-    teammate. ``deal_offer_made_by`` is filled when blank and is overwritten only
-    when a teammate explicitly starts a new analysis/offer.
+    teammate in saved snapshots. ``deal_offer_made_by`` is filled when blank and
+    is overwritten only when a teammate explicitly starts a new analysis/offer.
     """
     if not hasattr(state, "get"):
         return False
@@ -127,9 +151,9 @@ def apply_active_member_to_deal(
     else:
         state["decision_offer_made_by"] = current_offer_maker
 
-    state["deal_library_updated_by"] = name
+    _safe_widget_state_write(state, "deal_library_updated_by", name)
     if not clean_name(state.get("deal_library_assigned_to", "")):
-        state["deal_library_assigned_to"] = name
+        _safe_widget_state_write(state, "deal_library_assigned_to", name)
 
     normalized = state.get("one_load_normalized")
     if isinstance(normalized, dict):
