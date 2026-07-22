@@ -44,6 +44,25 @@ The script creates all four tabs and generates a private token automatically. Op
 5. Deploy and copy the `/exec` web-app URL.
 6. Paste that URL into the **Deal Library Setup** tab for your records.
 
+## 3A. Upgrade an existing Deal Library to secure POST
+
+The hardened Streamlit client sends the token inside an encrypted HTTPS POST body instead of putting it in the request URL. It automatically falls back to the old GET route only while an older Apps Script deployment is still active, so this upgrade does not interrupt the team.
+
+For an existing Deal Library:
+
+1. Open the connected Google Sheet.
+2. Open **Extensions → Apps Script**.
+3. Find and delete the existing `doPost(e)` function only.
+4. Copy all code from:
+   `setup/google_apps_script/DealLibrarySecurePostPatch.gs`
+5. Paste it below the existing Deal Library code and save.
+6. Open **Deploy → Manage deployments**.
+7. Click the pencil/edit icon for the current web app.
+8. Choose **New version**, then click **Deploy**.
+9. Return to Streamlit, reboot the app, and click **Test Sheet Connection**.
+
+After the secure deployment tests successfully, run `rotateDealLibraryToken` once in Apps Script as a precaution. Immediately copy the returned token into the `DEAL_LIBRARY_TOKEN` Streamlit secret, save, reboot, and test the Sheet connection again. Do not rotate the token until you are ready to update the Streamlit secret in the same session.
+
 ## 4. Add Streamlit secrets
 
 In the Streamlit app settings, add:
