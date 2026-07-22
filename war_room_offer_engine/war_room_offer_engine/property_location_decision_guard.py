@@ -52,12 +52,26 @@ def missing_items_with_location(
     return list(dict.fromkeys(missing))
 
 
+def _install_start_new_property_hotfix() -> bool:
+    # This guard loads before the final Stability v1 wrapper. The hotfix installs
+    # only a deferred Streamlit title hook here, then patches the completed wrapper
+    # chain on the first application render. That avoids circular startup imports.
+    try:
+        import start_new_property_reset_hotfix as reset_hotfix
+    except ImportError:
+        try:
+            from . import start_new_property_reset_hotfix as reset_hotfix
+        except ImportError:
+            from war_room_offer_engine import start_new_property_reset_hotfix as reset_hotfix
+    return bool(reset_hotfix.install_deferred_hook())
+
+
 def install() -> bool:
-    if getattr(logic, "_property_location_decision_guard_installed", False):
-        return True
-    logic._property_location_original_missing_items = _ORIGINAL_MISSING_ITEMS
-    logic.missing_items = missing_items_with_location
-    logic._property_location_decision_guard_installed = True
+    if not getattr(logic, "_property_location_decision_guard_installed", False):
+        logic._property_location_original_missing_items = _ORIGINAL_MISSING_ITEMS
+        logic.missing_items = missing_items_with_location
+        logic._property_location_decision_guard_installed = True
+    _install_start_new_property_hotfix()
     return True
 
 
