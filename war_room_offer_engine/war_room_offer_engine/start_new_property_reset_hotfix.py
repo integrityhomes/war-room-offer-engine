@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+try:
+    import property_state_scope as scope
+except ImportError:
+    try:
+        from . import property_state_scope as scope
+    except ImportError:
+        from war_room_offer_engine import property_state_scope as scope
+
 
 PENDING_RESET_KEY = "stability_start_new_property_reset_pending"
 _TITLE_HOOK_FLAG = "_start_new_property_reset_title_hook_installed"
@@ -42,49 +50,37 @@ def clear_property_state_without_rewriting_preferences(
     *,
     preserve_current_inputs: bool,
 ) -> list[str]:
-    """Clear property evidence while leaving preserved widget keys untouched.
-
-    Stability v1 already skipped session-preference keys while removing property
-    data, but then redundantly wrote those saved values back. Some preferences,
-    especially the active workspace selector, are instantiated before the Deal
-    Decision Center renders. Streamlit therefore rejects the redundant assignment.
-
-    Preserving a value only requires not deleting it. This implementation never
-    rewrites teammate, workspace, search, auto-save, or verified-mode preferences.
-    It also leaves current property/price inputs untouched during an automatic
-    cross-property cleanup.
-    """
-    stability = _load_stability()
-    if not hasattr(state, "get"):
-        return []
-
-    preserve = set(stability._SESSION_PREFERENCE_KEYS)
-    if preserve_current_inputs:
-        preserve.update(stability._CURRENT_INPUT_KEYS)
-
-    removed: list[str] = []
-    for key in list(state.keys()):
-        if key in preserve:
-            continue
-        if stability._is_property_state_key(key):
-            state.pop(key, None)
-            removed.append(str(key))
-    return removed
+    """Clear property evidence through the authoritative state-scope registry."""
+    return scope.clear_property_state(
+        state,
+        preserve_current_inputs=preserve_current_inputs,
+    )
 
 
 def reset_property_without_rewriting_preferences(st: Any) -> None:
     """Run the complete property reset without assigning preserved widget keys."""
     stability = _load_stability()
     stability._ORIGINAL_RESET(st)
-    clear_property_state_without_rewriting_preferences(
+    scope.clear_property_state(
         st.session_state,
         preserve_current_inputs=False,
     )
 
 
+def _install_scope_aliases(stability: Any) -> None:
+    """Expose the authoritative registry through Stability v1 compatibility names."""
+    stability._SESSION_PREFERENCE_KEYS = scope.SESSION_PREFERENCE_KEYS
+    stability._CURRENT_INPUT_KEYS = scope.CURRENT_INPUT_KEYS
+    stability._PROPERTY_PREFIXES = scope.PROPERTY_PREFIXES
+    stability._PROPERTY_EXACT_KEYS = scope.PROPERTY_EXACT_KEYS
+    stability._is_property_state_key = scope.is_property_state_key
+    stability.clear_property_state = clear_property_state_without_rewriting_preferences
+
+
 def install_runtime_patch() -> bool:
-    """Move reset to the next rerun and remove every redundant preference write."""
+    """Move reset to the next rerun and install complete property-state isolation."""
     stability = _load_stability()
+    _install_scope_aliases(stability)
     if getattr(stability, _PATCH_FLAG, False):
         stability._patch_loaded_aliases()
         return True
@@ -106,7 +102,6 @@ def install_runtime_patch() -> bool:
         apply_pending_reset(st, reset_property_without_rewriting_preferences)
         return original_render(st, ui, original_renderer, exit_mode_value)
 
-    stability.clear_property_state = clear_property_state_without_rewriting_preferences
     stability.reset_with_stability = reset_after_rerun
     stability.render_with_stability = render_with_safe_pending_reset
     stability._patch_loaded_aliases()
