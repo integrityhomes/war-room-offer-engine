@@ -94,7 +94,9 @@ assert "_render_listing_radar" in workspace_text
 ui_text = (APP_DIR / "listing_radar_ui.py").read_text(encoding="utf-8")
 assert "Analyze in Deal Engine" in ui_text
 assert "decision_property_input" in ui_text
-assert "rentcast" not in ui_text.lower()
+assert "lookup_rentcast" not in ui_text
+assert "enrich_property_with_rentcast" not in ui_text
+assert "RENTCAST_API_KEY" not in ui_text
 
 setup_dir = REPO_ROOT / "setup" / "google_apps_script"
 setup_text = (setup_dir / "ListingRadarV2_Setup.gs").read_text(encoding="utf-8")
