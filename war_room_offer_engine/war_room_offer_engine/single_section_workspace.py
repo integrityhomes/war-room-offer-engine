@@ -7,6 +7,7 @@ from typing import Any
 
 SECTION_OPTIONS = [
     "🏠 One-Load",
+    "📡 Listing Radar",
     "🔎 Pull Data",
     "🛡️ Protection",
     "🏷️ Rent",
@@ -19,6 +20,7 @@ SECTION_OPTIONS = [
 
 SECTION_NAMES = {
     "🏠 One-Load": "One-Load",
+    "📡 Listing Radar": "Listing Radar",
     "🔎 Pull Data": "Pull Data",
     "🛡️ Protection": "Protection",
     "🏷️ Rent": "Rent",
@@ -97,6 +99,20 @@ def _render_comps_only(st, ui):
     return st.session_state.get("repair_media_files", []) or []
 
 
+def _render_listing_radar(st) -> None:
+    if getattr(st, "_war_room_listing_radar_rendered", False):
+        return
+    st._war_room_listing_radar_rendered = True
+    try:
+        import listing_radar_ui
+    except ImportError:
+        try:
+            from . import listing_radar_ui
+        except ImportError:
+            from war_room_offer_engine import listing_radar_ui
+    listing_radar_ui.render(st)
+
+
 def _wrap_renderer(namespace: dict[str, Any], function_name: str, st) -> None:
     renderer = namespace.get(function_name)
     if not callable(renderer) or getattr(renderer, "_war_room_single_section", False):
@@ -152,17 +168,20 @@ def install_workspace() -> bool:
 
     def title_with_workspace(*args, **kwargs):
         st._war_room_workspace_radio_rendered = False
+        st._war_room_listing_radar_rendered = False
         result = original_title(*args, **kwargs)
         install_renderer_router_from_caller(st)
         render_workspace_selector(st, original_radio)
+        if active_section(st) == "Listing Radar":
+            _render_listing_radar(st)
         return result
 
     def markdown_with_workspace(body, *args, **kwargs):
         text = str(body or "").strip()
         match = QUICK_LINK_PATTERN.match(text)
         if match and match.group(1) in {
-            "One-Load", "Pull Data", "Protection", "Rent", "Buyer Demand",
-            "Dispo", "Repairs", "Comps / ARV", "QA / Decision",
+            "One-Load", "Listing Radar", "Pull Data", "Protection", "Rent",
+            "Buyer Demand", "Dispo", "Repairs", "Comps / ARV", "QA / Decision",
         }:
             render_workspace_selector(st, original_radio)
             return None
