@@ -77,6 +77,7 @@ def _analysis_record(listing: dict[str, Any]) -> dict[str, Any]:
 
 
 def queue_for_one_load(st: Any, listing: dict[str, Any]) -> bool:
+    install()
     state = st.session_state
     teammate = identity.active_team_member(state)
     if not teammate:
