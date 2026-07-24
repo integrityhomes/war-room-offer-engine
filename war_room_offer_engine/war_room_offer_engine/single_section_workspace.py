@@ -99,10 +99,22 @@ def _render_comps_only(st, ui):
     return st.session_state.get("repair_media_files", []) or []
 
 
+def _install_listing_radar_bridge() -> None:
+    try:
+        import listing_radar_native_bridge as bridge
+    except ImportError:
+        try:
+            from . import listing_radar_native_bridge as bridge
+        except ImportError:
+            from war_room_offer_engine import listing_radar_native_bridge as bridge
+    bridge.install()
+
+
 def _render_listing_radar(st) -> None:
     if getattr(st, "_war_room_listing_radar_rendered", False):
         return
     st._war_room_listing_radar_rendered = True
+    _install_listing_radar_bridge()
     try:
         import listing_radar_ui
     except ImportError:
