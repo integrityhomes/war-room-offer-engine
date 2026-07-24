@@ -61,37 +61,82 @@ function setupListingRadarV2() {
 
   const properties = PropertiesService.getScriptProperties();
   properties.setProperty('LISTING_RADAR_SPREADSHEET_ID', spreadsheet.getId());
-
-  let appToken = properties.getProperty('LISTING_RADAR_TOKEN');
-  if (!appToken) {
-    appToken = lrGenerateToken_();
-    properties.setProperty('LISTING_RADAR_TOKEN', appToken);
-  }
-
-  let webhookSecret = properties.getProperty('LISTING_RADAR_WEBHOOK_SECRET');
-  if (!webhookSecret) {
-    webhookSecret = lrGenerateToken_();
-    properties.setProperty('LISTING_RADAR_WEBHOOK_SECRET', webhookSecret);
-  }
+  const secretStatus = lrEnsureSecrets_();
 
   const sheets = lrEnsureAllSheets_(spreadsheet);
   Object.keys(sheets).forEach(function(key) {
     lrFormatSheet_(sheets[key]);
   });
   lrSeedMarkets_(sheets.MARKETS);
-  lrWriteSetupSheet_(sheets.SETUP, spreadsheet, appToken, webhookSecret);
+  lrWriteSetupSheet_(sheets.SETUP, spreadsheet);
 
   return {
     ok: true,
     spreadsheet_id: spreadsheet.getId(),
-    listing_radar_token: appToken,
-    webhook_secret: webhookSecret,
+    secrets_created: secretStatus.created,
     sheets: Object.keys(sheets)
   };
 }
 
+function lrEnsureSecrets_() {
+  const properties = PropertiesService.getScriptProperties();
+  let created = false;
+
+  if (!properties.getProperty('LISTING_RADAR_TOKEN')) {
+    properties.setProperty('LISTING_RADAR_TOKEN', lrGenerateToken_());
+    created = true;
+  }
+  if (!properties.getProperty('LISTING_RADAR_WEBHOOK_SECRET')) {
+    properties.setProperty('LISTING_RADAR_WEBHOOK_SECRET', lrGenerateToken_());
+    created = true;
+  }
+  return {created: created};
+}
+
 function lrGenerateToken_() {
   return Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+}
+
+function showListingRadarConnectionSecrets() {
+  lrEnsureSecrets_();
+  const properties = PropertiesService.getScriptProperties();
+  const appToken = properties.getProperty('LISTING_RADAR_TOKEN') || '';
+  const webhookSecret = properties.getProperty('LISTING_RADAR_WEBHOOK_SECRET') || '';
+  if (!appToken || !webhookSecret) {
+    throw new Error('Listing Radar connection secrets could not be created.');
+  }
+
+  const payload = JSON.stringify({
+    appToken: appToken,
+    webhookSecret: webhookSecret
+  }).replace(/</g, '\\u003c');
+
+  const html = HtmlService.createHtmlOutput(
+    '<div style="font-family:Arial,sans-serif;padding:18px;line-height:1.4">' +
+      '<h3 style="margin-top:0">Listing Radar connection secrets</h3>' +
+      '<p>Copy these only into Streamlit Secrets and the Apify webhook setup. Do not place them in a spreadsheet cell, screenshot, email, or chat.</p>' +
+      '<label><b>LISTING_RADAR_TOKEN</b></label>' +
+      '<textarea id="appToken" readonly style="width:100%;height:58px;margin:6px 0 8px"></textarea>' +
+      '<button onclick="copyValue(\'appToken\')">Copy Listing Radar token</button>' +
+      '<br><br>' +
+      '<label><b>LISTING_RADAR_WEBHOOK_SECRET</b></label>' +
+      '<textarea id="webhookSecret" readonly style="width:100%;height:58px;margin:6px 0 8px"></textarea>' +
+      '<button onclick="copyValue(\'webhookSecret\')">Copy webhook secret</button>' +
+      '<p id="status" style="font-weight:bold"></p>' +
+      '<script>' +
+        'const secrets=' + payload + ';' +
+        'document.getElementById("appToken").value=secrets.appToken;' +
+        'document.getElementById("webhookSecret").value=secrets.webhookSecret;' +
+        'function copyValue(id){' +
+          'const field=document.getElementById(id);field.focus();field.select();' +
+          'document.execCommand("copy");document.getElementById("status").textContent="Copied securely.";' +
+        '}' +
+      '</script>' +
+    '</div>'
+  ).setWidth(620).setHeight(480);
+
+  SpreadsheetApp.getUi().showModalDialog(html, 'Listing Radar secrets');
+  return {ok: true};
 }
 
 function lrSpreadsheet_() {
@@ -149,14 +194,14 @@ function lrSeedMarkets_(sheet) {
   sheet.getRange(2, 1, seeds.length, LR.HEADERS.MARKETS.length).setValues(seeds);
 }
 
-function lrWriteSetupSheet_(sheet, spreadsheet, appToken, webhookSecret) {
+function lrWriteSetupSheet_(sheet, spreadsheet) {
   sheet.clearContents();
   sheet.getRange(1, 1, 1, 3).setValues([LR.HEADERS.SETUP]);
   const rows = [
     ['Spreadsheet ID', spreadsheet.getId(), 'Created automatically.'],
-    ['LISTING_RADAR_TOKEN', appToken, 'Copy into Streamlit secrets after the separate web app is deployed.'],
-    ['LISTING_RADAR_WEBHOOK_SECRET', webhookSecret, 'Use in the Apify webhook payload. Never place it in source code.'],
-    ['APIFY_TOKEN', 'Add in Apps Script project settings', 'Create a dedicated token named Listing Radar Feed. Do not paste it into a sheet cell.'],
+    ['LISTING_RADAR_TOKEN', 'Stored securely in Apps Script Properties', 'Run showListingRadarConnectionSecrets only when you are ready to copy it into Streamlit Secrets.'],
+    ['LISTING_RADAR_WEBHOOK_SECRET', 'Stored securely in Apps Script Properties', 'Run showListingRadarConnectionSecrets only when you are ready to configure the Apify webhook.'],
+    ['APIFY_TOKEN', 'Add in Apps Script project settings', 'Create a dedicated token named Listing Radar Feed. Never paste it into a spreadsheet cell.'],
     ['Deployment URL', 'Add after deployment', 'Deploy this separate project as a web app and copy the /exec URL.'],
     ['Mode', 'Mirror only', 'Current Illinois automation remains production until the V2 mirror passes 14 scheduled runs.']
   ];

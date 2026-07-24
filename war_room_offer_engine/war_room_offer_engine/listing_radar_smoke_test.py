@@ -128,4 +128,12 @@ assert "function doPost(e)" in webapp_text
 assert "update_queue" in webapp_text
 assert not re.search(r"apify_api_[A-Za-z0-9_-]{10,}", combined)
 
+assert "showListingRadarConnectionSecrets" in setup_text
+assert "Stored securely in Apps Script Properties" in setup_text
+assert "showModalDialog" in setup_text
+assert "['LISTING_RADAR_TOKEN', appToken" not in setup_text
+assert "['LISTING_RADAR_WEBHOOK_SECRET', webhookSecret" not in setup_text
+assert "listing_radar_token: appToken" not in setup_text
+assert "webhook_secret: webhookSecret" not in setup_text
+
 print("Listing Radar Phase 1 foundation smoke test passed.")
