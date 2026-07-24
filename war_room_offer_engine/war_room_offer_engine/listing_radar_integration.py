@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from typing import Any
 from urllib.parse import urlencode
 
@@ -124,8 +125,6 @@ def _clear_prior_property(state: Any) -> None:
                 from war_room_offer_engine import production_stability as stability
         stability.clear_property_state(state, preserve_current_inputs=False)
     except Exception:
-        # The handoff occurs before any property widgets render, so a narrow
-        # property-key cleanup is safe even when the stability wrapper is absent.
         prefixes = (
             "decision_", "one_load_", "rentcast_", "rent_", "arv_", "auto_",
             "location_", "requested_property_", "resolved_property_", "seller_",
@@ -234,3 +233,107 @@ def agent_contact_finder_url(listing: dict[str, Any]) -> str:
     )
     separator = "&" if "?" in base else "?"
     return base + separator + query
+
+
+def _decision_modules():
+    try:
+        import deal_decision_ui as decision_ui
+    except ImportError:
+        try:
+            from . import deal_decision_ui as decision_ui
+        except ImportError:
+            from war_room_offer_engine import deal_decision_ui as decision_ui
+    try:
+        from ui_sections import one_load_deal_ui as one_load
+    except ImportError:
+        try:
+            from .ui_sections import one_load_deal_ui as one_load
+        except ImportError:
+            from war_room_offer_engine.ui_sections import one_load_deal_ui as one_load
+    return decision_ui, one_load
+
+
+def render_with_listing_radar(st: Any, ui: Any, original_renderer: Any, exit_mode_value: str = "Auto") -> Any:
+    applied = apply_pending_handoff(st)
+    if applied:
+        message = st.session_state.pop(HANDOFF_MESSAGE_KEY, "")
+        if message:
+            st.success(message)
+    elif st.session_state.get(HANDOFF_ERROR_KEY):
+        st.error(st.session_state.pop(HANDOFF_ERROR_KEY))
+    return _ORIGINAL_DECISION_RENDER(st, ui, original_renderer, exit_mode_value)
+
+
+def run_with_listing_radar(st: Any, ui: Any, media_files: list[Any]) -> Any:
+    record = analysis_record(st.session_state)
+    if not record:
+        return _ORIGINAL_DECISION_RUN(st, ui, media_files)
+
+    _, one_load = _decision_modules()
+    original_one_load_run = one_load._run_one_load
+
+    def run_one_load_with_radar_record(
+        st_arg: Any,
+        ui_arg: Any,
+        csv_record: dict[str, Any] | None,
+        exit_mode: str,
+        overwrite_demo_values: bool = True,
+    ) -> dict[str, Any]:
+        chosen_record = csv_record if isinstance(csv_record, dict) and csv_record else record
+        return original_one_load_run(
+            st_arg,
+            ui_arg,
+            chosen_record,
+            exit_mode,
+            overwrite_demo_values,
+        )
+
+    one_load._run_one_load = run_one_load_with_radar_record
+    try:
+        result = _ORIGINAL_DECISION_RUN(st, ui, media_files)
+    finally:
+        one_load._run_one_load = original_one_load_run
+    mark_analysis_completed(st)
+    return result
+
+
+def _patch_loaded_aliases() -> None:
+    for module_name in (
+        "deal_decision_ui",
+        "war_room_offer_engine.deal_decision_ui",
+        "war_room_offer_engine.war_room_offer_engine.deal_decision_ui",
+    ):
+        loaded = sys.modules.get(module_name)
+        if loaded is not None:
+            loaded.render = render_with_listing_radar
+            loaded._run = run_with_listing_radar
+
+
+def install() -> bool:
+    global _ORIGINAL_DECISION_RENDER, _ORIGINAL_DECISION_RUN
+    decision_ui, _ = _decision_modules()
+    if getattr(decision_ui, "_listing_radar_native_integration_installed", False):
+        _patch_loaded_aliases()
+        return True
+
+    _ORIGINAL_DECISION_RENDER = decision_ui.render
+    _ORIGINAL_DECISION_RUN = decision_ui._run
+    decision_ui._listing_radar_original_render = _ORIGINAL_DECISION_RENDER
+    decision_ui._listing_radar_original_run = _ORIGINAL_DECISION_RUN
+    decision_ui.render = render_with_listing_radar
+    decision_ui._run = run_with_listing_radar
+
+    try:
+        import deal_library as library
+    except ImportError:
+        try:
+            from . import deal_library as library
+        except ImportError:
+            from war_room_offer_engine import deal_library as library
+    for key in (SELECTED_KEY, MARKET_KEY):
+        if key not in library.PERSISTED_STATE_KEYS:
+            library.PERSISTED_STATE_KEYS.append(key)
+
+    _patch_loaded_aliases()
+    decision_ui._listing_radar_native_integration_installed = True
+    return True
