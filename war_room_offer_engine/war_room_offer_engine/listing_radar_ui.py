@@ -5,11 +5,20 @@ from urllib.parse import quote
 
 try:
     import listing_radar_client as client
+    import listing_radar_integration as integration
+    import team_offer_identity as identity
+    from team_offer_integration import build_first_touch_outreach_for_team
 except ImportError:
     try:
         from . import listing_radar_client as client
+        from . import listing_radar_integration as integration
+        from . import team_offer_identity as identity
+        from .team_offer_integration import build_first_touch_outreach_for_team
     except ImportError:
         from war_room_offer_engine import listing_radar_client as client
+        from war_room_offer_engine import listing_radar_integration as integration
+        from war_room_offer_engine import team_offer_identity as identity
+        from war_room_offer_engine.team_offer_integration import build_first_touch_outreach_for_team
 
 
 def _money(value: Any) -> str:
@@ -25,14 +34,32 @@ def _text(value: Any, fallback: str = "Missing") -> str:
     return text or fallback
 
 
+def _invalidate(st) -> None:
+    st.session_state.pop("listing_radar_last_result", None)
+    st.session_state.pop("listing_radar_health", None)
+
+
 def _queue_for_analysis(st, listing: dict[str, Any]) -> None:
-    property_input = str(listing.get("listing_url") or listing.get("address") or "").strip()
-    st.session_state["decision_property_input"] = property_input
-    st.session_state["decision_lead_source"] = "Zillow / On-Market"
-    st.session_state["decision_asking_price"] = int(float(listing.get("asking_price") or 0))
-    st.session_state["listing_radar_selected_key"] = str(listing.get("listing_key") or "")
-    st.session_state["listing_radar_selected_listing"] = dict(listing)
-    st.session_state["war_room_active_section"] = "🏠 One-Load"
+    if integration.queue_for_one_load(st, listing):
+        st.rerun()
+
+
+def _update_workflow(st, listing: dict[str, Any], changes: dict[str, Any], success: str) -> None:
+    teammate = identity.active_team_member(st.session_state)
+    if not teammate:
+        st.session_state[integration.HANDOFF_ERROR_KEY] = "Select the current team member before changing Listing Radar workflow."
+        st.rerun()
+    listing_key = str(listing.get("listing_key") or "").strip()
+    result = client.update_queue(
+        listing_key,
+        {**changes, "updated_by": teammate},
+    )
+    if result.get("ok"):
+        st.session_state[integration.HANDOFF_MESSAGE_KEY] = success
+        st.session_state[integration.HANDOFF_ERROR_KEY] = ""
+        _invalidate(st)
+    else:
+        st.session_state[integration.HANDOFF_ERROR_KEY] = result.get("error", "Listing Radar workflow update failed.")
     st.rerun()
 
 
@@ -63,7 +90,18 @@ def _market_options(st) -> list[tuple[str, str]]:
     return options
 
 
+def _outreach(listing: dict[str, Any], teammate: str) -> dict[str, str]:
+    return build_first_touch_outreach_for_team(
+        agent_name=str(listing.get("agent_name") or ""),
+        address=str(listing.get("address") or "the property"),
+        asking_price=listing.get("asking_price", 0),
+        buyer_name=teammate,
+    )
+
+
 def _render_listing_card(st, listing: dict[str, Any], index: int) -> None:
+    teammate = identity.active_team_member(st.session_state)
+    listing_key = str(listing.get("listing_key") or index)
     with st.container(border=True):
         top = st.columns([1.2, 3.2, 1.4, 1.2])
         photo = str(listing.get("primary_photo") or "").strip()
@@ -100,7 +138,7 @@ def _render_listing_card(st, listing: dict[str, Any], index: int) -> None:
         top[3].metric("Workflow", _text(listing.get("workflow_status"), "New"))
         top[3].caption(f"Assigned: {_text(listing.get('assigned_to'), 'Unassigned')}")
 
-        contact = st.columns([1.5, 1.4, 1.4, 1.4, 1.7])
+        contact = st.columns([1.5, 1.15, 1.15, 1.15, 1.25, 1.7])
         agent = _text(listing.get("agent_name"), "Agent not found")
         brokerage = _text(listing.get("agent_brokerage"), "Brokerage missing")
         contact[0].write(f"**{agent}**")
@@ -119,19 +157,93 @@ def _render_listing_card(st, listing: dict[str, Any], index: int) -> None:
             contact[2].button("Phone Missing", disabled=True, key=f"radar_no_phone_{index}", use_container_width=True)
 
         email = str(listing.get("agent_email") or "").strip()
+        outreach = _outreach(listing, teammate) if teammate else {}
         if email:
-            subject = quote(f"Question about {address}")
-            contact[3].link_button("Email Agent", f"mailto:{email}?subject={subject}", use_container_width=True)
+            subject = quote(outreach.get("email_subject") or f"Question about {address}")
+            body = quote(outreach.get("email_body") or "")
+            contact[3].link_button("Email Agent", f"mailto:{email}?subject={subject}&body={body}", use_container_width=True)
         else:
             contact[3].button("Email Missing", disabled=True, key=f"radar_no_email_{index}", use_container_width=True)
 
-        if contact[4].button(
+        finder_url = integration.agent_contact_finder_url(listing)
+        if finder_url:
+            contact[4].link_button("Find Agent Contact", finder_url, use_container_width=True)
+        else:
+            contact[4].button(
+                "Find Agent Contact",
+                disabled=True,
+                key=f"radar_no_finder_{index}",
+                help="Add AGENT_CONTACT_FINDER_URL to Streamlit secrets to connect the existing Agent Contact Finder.",
+                use_container_width=True,
+            )
+
+        if contact[5].button(
             "Analyze in Deal Engine",
-            key=f"listing_radar_analyze_{listing.get('listing_key', index)}",
+            key=f"listing_radar_analyze_{listing_key}",
             type="primary",
+            disabled=not bool(teammate),
+            help=None if teammate else "Select the current team member above first.",
             use_container_width=True,
         ):
             _queue_for_analysis(st, listing)
+
+        with st.expander("Team workflow", expanded=False):
+            workflow = st.columns([1, 1, 1, 2.2])
+            if workflow[0].button(
+                "Assign to Me",
+                key=f"radar_assign_{listing_key}",
+                disabled=not bool(teammate),
+                use_container_width=True,
+            ):
+                _update_workflow(
+                    st,
+                    listing,
+                    {"assigned_to": teammate, "workflow_status": "Assigned"},
+                    f"{address} assigned to {teammate}.",
+                )
+            if workflow[1].button(
+                "Mark Contacted",
+                key=f"radar_contacted_{listing_key}",
+                disabled=not bool(teammate),
+                use_container_width=True,
+            ):
+                _update_workflow(
+                    st,
+                    listing,
+                    {"assigned_to": teammate, "workflow_status": "Contacted"},
+                    f"{address} marked contacted.",
+                )
+            if workflow[2].button(
+                "Dismiss",
+                key=f"radar_dismiss_{listing_key}",
+                disabled=not bool(teammate),
+                use_container_width=True,
+            ):
+                _update_workflow(
+                    st,
+                    listing,
+                    {"assigned_to": teammate, "workflow_status": "Dismissed"},
+                    f"{address} dismissed from the active queue.",
+                )
+
+            note_key = f"listing_radar_note_{listing_key}"
+            st.session_state.setdefault(note_key, str(listing.get("team_notes") or ""))
+            workflow[3].text_input("Team note", key=note_key, placeholder="Agent response, next step, repair concern...")
+            if st.button(
+                "Save Team Note",
+                key=f"radar_save_note_{listing_key}",
+                disabled=not bool(teammate),
+            ):
+                _update_workflow(
+                    st,
+                    listing,
+                    {
+                        "assigned_to": str(listing.get("assigned_to") or teammate),
+                        "workflow_status": str(listing.get("workflow_status") or "Assigned"),
+                        "team_notes": st.session_state.get(note_key, ""),
+                    },
+                    f"Team note saved for {address}.",
+                )
 
 
 def render(st) -> None:
@@ -139,6 +251,14 @@ def render(st) -> None:
     st.caption(
         "New and changed on-market listings flow here first. No RentCast or full deal-analysis credits are used until a teammate opens a property in the Deal Engine."
     )
+    identity.render_team_member_selector(st)
+
+    message = st.session_state.pop(integration.HANDOFF_MESSAGE_KEY, "")
+    error = st.session_state.pop(integration.HANDOFF_ERROR_KEY, "")
+    if message:
+        st.success(message)
+    if error:
+        st.error(error)
 
     if not client.is_connected():
         st.warning(
