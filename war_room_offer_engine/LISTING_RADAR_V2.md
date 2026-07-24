@@ -2,7 +2,9 @@
 
 ## Decision
 
-Rebuild the listing-feed layer beside the current AI Deal Feed Engine. Do not patch the existing RAW_FEED → MASTER_FEED → RentCast → spreadsheet offer-math chain into the War Room.
+Rebuild the listing-feed layer **inside the existing War Room workflow**, beside the current AI Deal Feed Engine. Listing Radar is not a separate acquisitions app. It becomes the front door for scheduled on-market listings, then hands selected properties into the same One-Load Deal Engine, teammate identity, Agent Contact Finder, Deal Library, RentCast intelligence, repairs, comps, negotiation and dispo tools already built.
+
+Do not patch the existing RAW_FEED → MASTER_FEED → RentCast → spreadsheet offer-math chain into the War Room.
 
 The current Illinois automation remains production until the V2 mirror completes at least 14 consecutive scheduled runs without missing listings, duplicating records, losing team work, or exposing credentials.
 
@@ -10,10 +12,26 @@ The current Illinois automation remains production until the V2 mirror completes
 
 - **Apify tasks** find public on-market listings.
 - **Listing Radar V2** stores current listing facts, listing history, run health and team workflow.
-- **War Room Deal Engine** is the only authority for rent confidence, ARV confidence, repairs, lane selection, starting offer, maximum offer and BUY / REVIEW / PASS.
-- **Team Deal Library** stores properties the team has chosen to analyze or pursue.
+- **War Room One-Load / Deal Engine** is the only authority for rent confidence, ARV confidence, repairs, lane selection, starting offer, maximum offer and BUY / REVIEW / PASS.
+- **Team Member & Offer Identity** follows the teammate from Listing Radar into One-Load and Deal Library history.
+- **Agent Contact Finder** is opened from Listing Radar when a phone or verified email is missing.
+- **Team Deal Library** stores properties the team has chosen to analyze or pursue and prevents unnecessary repeat paid pulls.
 - **REI BlackBook** receives hot leads and handles the CRM/follow-up work it already performs.
 - **XLeads** remains an outbound campaign and follow-up tool; it is not the listing database.
+
+## Native handoff contract
+
+When a teammate clicks **Analyze in Deal Engine**:
+
+1. The current teammate is required and assigned to the Listing Radar record.
+2. Prior property evidence is cleared using the existing production reset-isolation rules.
+3. Listing Radar search and filter settings remain intact.
+4. Address, Zillow URL, asking price, property facts and agent contact data are loaded into the existing One-Load field contract.
+5. The existing Listing Radar record is reused, so the app does not purchase another Zillow/Apify listing scrape merely to open the property.
+6. Deal Library preflight still checks for a saved analysis before RentCast or other paid sources run.
+7. The teammate presses **Pull Everything & Tell Me** to intentionally run the normal verified analysis.
+8. The resulting Deal Library ID is linked back to the Listing Radar team queue.
+9. **Start New Property** clears the source-listing identity and property facts while preserving teammate identity and Listing Radar filters.
 
 ## V2 Google Sheet
 
@@ -33,7 +51,7 @@ The setup creates:
 6. `QUARANTINE`
 7. `LISTING_RADAR_SETUP`
 
-The spreadsheet is a controlled backend and audit record. The acquisitions team works from the Listing Radar screen inside the War Room rather than horizontally scrolling through a large calculation sheet.
+The spreadsheet is a controlled backend and audit record. The acquisitions team works from the Listing Radar section inside the War Room rather than horizontally scrolling through a large calculation sheet.
 
 ## Listing identity and history
 
@@ -91,16 +109,21 @@ Texas must not be enabled statewide. Candidate ZIP groups are ranked and tested 
 
 ## Rollout gates
 
-### Phase 1 — Foundation
+### Phase 1 — Foundation and native integration
 
 - canonical schemas
 - market registry
 - normalization and merge engine
 - secure Apps Script setup and webhook ingestion
-- read-only Listing Radar War Room section
+- Listing Radar section inside the existing War Room
+- teammate identity and team workflow
+- native One-Load handoff
+- Deal Library preflight and source-link persistence
+- Agent Contact Finder launch path
+- reset-isolation compatibility
 - tests
 
-No production connection or cutover.
+No production feed connection or cutover.
 
 ### Phase 2 — Illinois mirror
 
@@ -111,14 +134,14 @@ No production connection or cutover.
 - run V1 and V2 side by side
 - compare every scheduled result
 
-### Phase 3 — Team workflow
+### Phase 3 — Team workflow and CRM handoff
 
 - assignment
 - contact status
 - notes and follow-up
 - agent-contact enrichment only for screened listings
-- Analyze in Deal Engine handoff
 - REI BlackBook handoff for qualified opportunities
+- XLeads handoff only when an outbound campaign is intentionally selected
 
 ### Phase 4 — Multi-market expansion
 
@@ -141,3 +164,4 @@ Retire the old AI Deal Feed Engine only after V2 has completed at least 14 clean
 - It does not invent agent emails.
 - It does not enable new states or ZIPs without validation.
 - It does not replace the existing Illinois feed during Phase 1.
+- It does not create a second, disconnected deal engine or team identity system.
