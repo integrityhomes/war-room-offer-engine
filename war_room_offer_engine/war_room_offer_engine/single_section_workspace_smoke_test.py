@@ -34,7 +34,9 @@ class FakeSt:
 
 fake_st = FakeSt()
 check(workspace.active_section(fake_st) == "One-Load", "One-Load is the default section")
-check(len(workspace.SECTION_OPTIONS) == 9, "all nine workspace tools are available")
+check(len(workspace.SECTION_OPTIONS) == 10, "all ten workspace tools are available")
+check("📡 Listing Radar" in workspace.SECTION_OPTIONS, "Listing Radar is available in the workspace")
+check(workspace.SECTION_NAMES["📡 Listing Radar"] == "Listing Radar", "Listing Radar has a stable section name")
 check(len(set(workspace.RENDER_SECTION_MAP.values())) == 8, "each primary renderer has one workspace section")
 
 selector_calls = []
@@ -71,6 +73,12 @@ namespace["render_one_load_deal_section"](fake_st, SimpleNamespace())
 namespace["render_lead_intake_section"](fake_st, SimpleNamespace())
 namespace["render_repair_section"](fake_st, SimpleNamespace())
 check(calls == ["Deal Decision Center"], "One-Load opens the simplified Deal Decision Center")
+
+fake_st.session_state["war_room_active_section"] = "📡 Listing Radar"
+namespace["render_one_load_deal_section"](fake_st, SimpleNamespace())
+namespace["render_lead_intake_section"](fake_st, SimpleNamespace())
+namespace["render_repair_section"](fake_st, SimpleNamespace())
+check(calls == ["Deal Decision Center"], "Listing Radar suppresses all property-analysis renderers")
 
 fake_st.session_state["war_room_active_section"] = "🛠️ Repairs"
 repair_result = namespace["render_repair_section"](fake_st, SimpleNamespace())
