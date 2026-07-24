@@ -90,10 +90,16 @@ assert client.is_connected() in {True, False}
 workspace_text = (APP_DIR / "single_section_workspace.py").read_text(encoding="utf-8")
 assert '"📡 Listing Radar"' in workspace_text
 assert "_render_listing_radar" in workspace_text
+assert "listing_radar_native_bridge" in workspace_text
 
 ui_text = (APP_DIR / "listing_radar_ui.py").read_text(encoding="utf-8")
+integration_text = (APP_DIR / "listing_radar_integration.py").read_text(encoding="utf-8")
 assert "Analyze in Deal Engine" in ui_text
-assert "decision_property_input" in ui_text
+assert "Find Agent Contact" in ui_text
+assert "team_offer_identity" in ui_text
+assert "decision_property_input" in integration_text
+assert "one_load_listing_url" in integration_text
+assert "deal_library_deal_id" in integration_text
 assert "lookup_rentcast" not in ui_text
 assert "enrich_property_with_rentcast" not in ui_text
 assert "RENTCAST_API_KEY" not in ui_text
