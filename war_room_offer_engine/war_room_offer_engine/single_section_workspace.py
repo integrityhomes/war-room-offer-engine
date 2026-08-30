@@ -5,48 +5,62 @@ import re
 from typing import Any
 
 
-# Daily work comes first. The underlying section names remain unchanged so the
-# stabilized renderers, saved session state, and existing integrations keep the
-# same contracts.
+# Keep these stable internal values exactly as the production app has used them.
+# User-friendly wording and daily-work ordering are handled separately below.
 SECTION_OPTIONS = [
-    "🏠 Analyze Deal",
+    "🏠 One-Load",
     "📡 Listing Radar",
-    "✅ Decision & Save",
-    "🔎 Property Data",
-    "🏘️ Comps & Value",
-    "🛠️ Repair Estimate",
-    "🏷️ Rent & Rent Comps",
+    "🔎 Pull Data",
+    "🛡️ Protection",
+    "🏷️ Rent",
     "📈 Buyer Demand",
-    "📣 Buyer Outreach",
-    "🛡️ Deal Protection",
+    "📣 Dispo",
+    "🛠️ Repairs",
+    "🏘️ Comps / ARV",
+    "✅ QA / Decision",
 ]
 
-SECTION_NAMES = {
-    "🏠 Analyze Deal": "One-Load",
-    "📡 Listing Radar": "Listing Radar",
-    "✅ Decision & Save": "QA / Decision",
-    "🔎 Property Data": "Pull Data",
-    "🏘️ Comps & Value": "Comps / ARV",
-    "🛠️ Repair Estimate": "Repairs",
-    "🏷️ Rent & Rent Comps": "Rent",
-    "📈 Buyer Demand": "Buyer Demand",
-    "📣 Buyer Outreach": "Dispo",
-    "🛡️ Deal Protection": "Protection",
-}
+WORKSPACE_OPTIONS = [
+    "🏠 One-Load",
+    "📡 Listing Radar",
+    "✅ QA / Decision",
+    "🔎 Pull Data",
+    "🏘️ Comps / ARV",
+    "🛠️ Repairs",
+    "🏷️ Rent",
+    "📈 Buyer Demand",
+    "📣 Dispo",
+    "🛡️ Protection",
+]
 
-# Preserve sessions created by the prior developer-facing navigation labels.
-LEGACY_SECTION_ALIASES = {
+SECTION_DISPLAY_LABELS = {
     "🏠 One-Load": "🏠 Analyze Deal",
     "📡 Listing Radar": "📡 Listing Radar",
+    "✅ QA / Decision": "✅ Decision & Save",
     "🔎 Pull Data": "🔎 Property Data",
-    "🛡️ Protection": "🛡️ Deal Protection",
+    "🏘️ Comps / ARV": "🏘️ Comps & Value",
+    "🛠️ Repairs": "🛠️ Repair Estimate",
     "🏷️ Rent": "🏷️ Rent & Rent Comps",
     "📈 Buyer Demand": "📈 Buyer Demand",
     "📣 Dispo": "📣 Buyer Outreach",
-    "🛠️ Repairs": "🛠️ Repair Estimate",
-    "🏘️ Comps / ARV": "🏘️ Comps & Value",
-    "✅ QA / Decision": "✅ Decision & Save",
+    "🛡️ Protection": "🛡️ Deal Protection",
 }
+
+SECTION_NAMES = {
+    "🏠 One-Load": "One-Load",
+    "📡 Listing Radar": "Listing Radar",
+    "🔎 Pull Data": "Pull Data",
+    "🛡️ Protection": "Protection",
+    "🏷️ Rent": "Rent",
+    "📈 Buyer Demand": "Buyer Demand",
+    "📣 Dispo": "Dispo",
+    "🛠️ Repairs": "Repairs",
+    "🏘️ Comps / ARV": "Comps / ARV",
+    "✅ QA / Decision": "QA / Decision",
+}
+
+# Compatibility with the friendly values briefly used on the usability branch.
+DISPLAY_TO_STABLE = {display: stable for stable, display in SECTION_DISPLAY_LABELS.items()}
 
 SECTION_DESCRIPTIONS = {
     "One-Load": "Start here for normal deal work: load one property, verify the evidence, and get the recommended offer path.",
@@ -75,40 +89,35 @@ RENDER_SECTION_MAP = {
 QUICK_LINK_PATTERN = re.compile(r"^\[[^\]]*\*\*(.+?)\*\*\]\(#.+\)$")
 
 
-def _normalize_display_section(value: Any) -> str:
+def _normalize_section_value(value: Any) -> str:
     selected = str(value or "")
     if selected in SECTION_OPTIONS:
         return selected
-    return LEGACY_SECTION_ALIASES.get(selected, SECTION_OPTIONS[0])
+    return DISPLAY_TO_STABLE.get(selected, SECTION_OPTIONS[0])
 
 
 def active_section(st) -> str:
-    selected = _normalize_display_section(st.session_state.get("war_room_active_section", SECTION_OPTIONS[0]))
+    selected = _normalize_section_value(st.session_state.get("war_room_active_section", SECTION_OPTIONS[0]))
     return SECTION_NAMES.get(selected, "One-Load")
 
 
 def render_workspace_selector(st, original_radio) -> None:
-    """Render the user-facing work-area picker once per Streamlit rerun.
-
-    The selector keeps every specialist tool available, but puts the three
-    normal operator destinations first: Analyze Deal, Listing Radar, and
-    Decision & Save. Legacy session labels are migrated before the widget is
-    instantiated so existing saved sessions remain usable.
-    """
+    """Render one user-friendly work-area picker without changing stable state values."""
     if getattr(st, "_war_room_workspace_radio_rendered", False):
         return
     st._war_room_workspace_radio_rendered = True
 
-    current = _normalize_display_section(st.session_state.get("war_room_active_section", SECTION_OPTIONS[0]))
+    current = _normalize_section_value(st.session_state.get("war_room_active_section", SECTION_OPTIONS[0]))
     st.session_state["war_room_active_section"] = current
     selected = original_radio(
         "Work area",
-        SECTION_OPTIONS,
+        WORKSPACE_OPTIONS,
         key="war_room_active_section",
+        format_func=lambda option: SECTION_DISPLAY_LABELS.get(option, option),
         help="Start with Analyze Deal for normal property work. Open the evidence tools only when you need to verify or adjust a specific part of the analysis.",
     )
-    selected_display = _normalize_display_section(selected or st.session_state.get("war_room_active_section"))
-    section_name = SECTION_NAMES.get(selected_display, "One-Load")
+    stable_selected = _normalize_section_value(selected or st.session_state.get("war_room_active_section"))
+    section_name = SECTION_NAMES.get(stable_selected, "One-Load")
     caption = SECTION_DESCRIPTIONS.get(section_name, "")
     if caption and hasattr(st, "caption"):
         st.caption(caption)
