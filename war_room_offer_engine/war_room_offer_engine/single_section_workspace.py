@@ -5,6 +5,8 @@ import re
 from typing import Any
 
 
+# Keep these stable internal values exactly as the production app has used them.
+# User-friendly wording and daily-work ordering are handled separately below.
 SECTION_OPTIONS = [
     "🏠 One-Load",
     "📡 Listing Radar",
@@ -18,6 +20,32 @@ SECTION_OPTIONS = [
     "✅ QA / Decision",
 ]
 
+WORKSPACE_OPTIONS = [
+    "🏠 One-Load",
+    "📡 Listing Radar",
+    "✅ QA / Decision",
+    "🔎 Pull Data",
+    "🏘️ Comps / ARV",
+    "🛠️ Repairs",
+    "🏷️ Rent",
+    "📈 Buyer Demand",
+    "📣 Dispo",
+    "🛡️ Protection",
+]
+
+SECTION_DISPLAY_LABELS = {
+    "🏠 One-Load": "🏠 Analyze Deal",
+    "📡 Listing Radar": "📡 Listing Radar",
+    "✅ QA / Decision": "✅ Decision & Save",
+    "🔎 Pull Data": "🔎 Property Data",
+    "🏘️ Comps / ARV": "🏘️ Comps & Value",
+    "🛠️ Repairs": "🛠️ Repair Estimate",
+    "🏷️ Rent": "🏷️ Rent & Rent Comps",
+    "📈 Buyer Demand": "📈 Buyer Demand",
+    "📣 Dispo": "📣 Buyer Outreach",
+    "🛡️ Protection": "🛡️ Deal Protection",
+}
+
 SECTION_NAMES = {
     "🏠 One-Load": "One-Load",
     "📡 Listing Radar": "Listing Radar",
@@ -29,6 +57,22 @@ SECTION_NAMES = {
     "🛠️ Repairs": "Repairs",
     "🏘️ Comps / ARV": "Comps / ARV",
     "✅ QA / Decision": "QA / Decision",
+}
+
+# Compatibility with the friendly values briefly used on the usability branch.
+DISPLAY_TO_STABLE = {display: stable for stable, display in SECTION_DISPLAY_LABELS.items()}
+
+SECTION_DESCRIPTIONS = {
+    "One-Load": "Start here for normal deal work: load one property, verify the evidence, and get the recommended offer path.",
+    "Listing Radar": "Review incoming listings and send the right property into the Deal Analyzer.",
+    "QA / Decision": "Review the final answer, offer range, risks, and saved deal record before taking action.",
+    "Pull Data": "Review or refresh the property facts used by the analysis.",
+    "Comps / ARV": "Review sold comps and the value evidence behind the ARV.",
+    "Repairs": "Review photos, notes, repair scope, and the repair estimate.",
+    "Rent": "Review rent evidence and rent comps, especially when Slow Flip depends on verified rent.",
+    "Buyer Demand": "Review buyer-market strength and exit confidence.",
+    "Dispo": "Review buyer feedback and outreach tools after the deal is protected appropriately.",
+    "Protection": "Review what deal details may be shared before and after the property is under contract.",
 }
 
 RENDER_SECTION_MAP = {
@@ -45,28 +89,38 @@ RENDER_SECTION_MAP = {
 QUICK_LINK_PATTERN = re.compile(r"^\[[^\]]*\*\*(.+?)\*\*\]\(#.+\)$")
 
 
+def _normalize_section_value(value: Any) -> str:
+    selected = str(value or "")
+    if selected in SECTION_OPTIONS:
+        return selected
+    return DISPLAY_TO_STABLE.get(selected, SECTION_OPTIONS[0])
+
+
 def active_section(st) -> str:
-    selected = st.session_state.get("war_room_active_section", SECTION_OPTIONS[0])
-    return SECTION_NAMES.get(str(selected), "One-Load")
+    selected = _normalize_section_value(st.session_state.get("war_room_active_section", SECTION_OPTIONS[0]))
+    return SECTION_NAMES.get(selected, "One-Load")
 
 
 def render_workspace_selector(st, original_radio) -> None:
-    """Render the section picker once per Streamlit rerun.
-
-    The picker used to depend on an old quick-link markdown row. Saved deals can
-    bypass that row, which made Rent and Comps / ARV impossible to reopen. The
-    title hook now calls this directly so navigation is always available.
-    """
+    """Render one user-friendly work-area picker without changing stable state values."""
     if getattr(st, "_war_room_workspace_radio_rendered", False):
         return
     st._war_room_workspace_radio_rendered = True
-    st.session_state.setdefault("war_room_active_section", SECTION_OPTIONS[0])
-    original_radio(
-        "Open section",
-        SECTION_OPTIONS,
+
+    current = _normalize_section_value(st.session_state.get("war_room_active_section", SECTION_OPTIONS[0]))
+    st.session_state["war_room_active_section"] = current
+    selected = original_radio(
+        "Work area",
+        WORKSPACE_OPTIONS,
         key="war_room_active_section",
-        label_visibility="collapsed",
+        format_func=lambda option: SECTION_DISPLAY_LABELS.get(option, option),
+        help="Start with Analyze Deal for normal property work. Open the evidence tools only when you need to verify or adjust a specific part of the analysis.",
     )
+    stable_selected = _normalize_section_value(selected or st.session_state.get("war_room_active_section"))
+    section_name = SECTION_NAMES.get(stable_selected, "One-Load")
+    caption = SECTION_DESCRIPTIONS.get(section_name, "")
+    if caption and hasattr(st, "caption"):
+        st.caption(caption)
 
 
 def _hidden_return(function_name: str, st):
@@ -94,7 +148,7 @@ def _render_comps_only(st, ui):
             from .ui_sections.comps_ui import render_comps_section
         except ImportError:
             from war_room_offer_engine.ui_sections.comps_ui import render_comps_section
-    st.header("🏘️ Comps / ARV")
+    st.header("🏘️ Comps & Value")
     render_comps_section(st, ui)
     return st.session_state.get("repair_media_files", []) or []
 
@@ -194,6 +248,8 @@ def install_workspace() -> bool:
         if match and match.group(1) in {
             "One-Load", "Listing Radar", "Pull Data", "Protection", "Rent",
             "Buyer Demand", "Dispo", "Repairs", "Comps / ARV", "QA / Decision",
+            "Analyze Deal", "Decision & Save", "Property Data", "Comps & Value",
+            "Repair Estimate", "Rent & Rent Comps", "Buyer Outreach", "Deal Protection",
         }:
             render_workspace_selector(st, original_radio)
             return None

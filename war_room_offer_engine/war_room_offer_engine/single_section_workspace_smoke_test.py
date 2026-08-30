@@ -30,29 +30,52 @@ class FakeState(dict):
 class FakeSt:
     def __init__(self):
         self.session_state = FakeState()
+        self.captions: list[str] = []
+
+    def caption(self, text: str) -> None:
+        self.captions.append(text)
 
 
 fake_st = FakeSt()
-check(workspace.active_section(fake_st) == "One-Load", "One-Load is the default section")
-check(len(workspace.SECTION_OPTIONS) == 10, "all ten workspace tools are available")
-check("📡 Listing Radar" in workspace.SECTION_OPTIONS, "Listing Radar is available in the workspace")
-check(workspace.SECTION_NAMES["📡 Listing Radar"] == "Listing Radar", "Listing Radar has a stable section name")
+check(workspace.active_section(fake_st) == "One-Load", "Analyze Deal is the default work area")
+check(len(workspace.SECTION_OPTIONS) == 10, "all ten stable workspace values remain available")
+check(
+    workspace.WORKSPACE_OPTIONS[:3] == ["🏠 One-Load", "📡 Listing Radar", "✅ QA / Decision"],
+    "daily work destinations appear first without changing stable values",
+)
+check(workspace.SECTION_DISPLAY_LABELS["🏠 One-Load"] == "🏠 Analyze Deal", "One-Load displays as Analyze Deal")
+check(workspace.SECTION_DISPLAY_LABELS["✅ QA / Decision"] == "✅ Decision & Save", "QA/Decision displays as Decision & Save")
+check(workspace.SECTION_NAMES["🏠 One-Load"] == "One-Load", "One-Load keeps its stabilized routing value")
+check(workspace.SECTION_NAMES["📡 Listing Radar"] == "Listing Radar", "Listing Radar keeps its stabilized routing value")
 check(len(set(workspace.RENDER_SECTION_MAP.values())) == 8, "each primary renderer has one workspace section")
+
+# Stable sessions must continue to reopen the exact same underlying workspace.
+fake_st.session_state["war_room_active_section"] = "🛠️ Repairs"
+check(workspace.active_section(fake_st) == "Repairs", "existing Repairs session value remains compatible")
+# Friendly values from the usability branch also fail safely back to the stable value.
+fake_st.session_state["war_room_active_section"] = "🛠️ Repair Estimate"
+check(workspace.active_section(fake_st) == "Repairs", "friendly Repair Estimate value migrates to stable Repairs")
+fake_st.session_state.clear()
 
 selector_calls = []
 workspace.render_workspace_selector(
     fake_st,
-    lambda label, options, **kwargs: selector_calls.append((label, list(options), kwargs)),
+    lambda label, options, **kwargs: selector_calls.append((label, list(options), kwargs)) or options[0],
 )
 workspace.render_workspace_selector(
     fake_st,
-    lambda label, options, **kwargs: selector_calls.append((label, list(options), kwargs)),
+    lambda label, options, **kwargs: selector_calls.append((label, list(options), kwargs)) or options[0],
 )
-check(len(selector_calls) == 1, "section selector renders exactly once per rerun")
-check(selector_calls[0][0] == "Open section", "section selector has the expected label")
-check(selector_calls[0][1] == workspace.SECTION_OPTIONS, "section selector exposes all workspace sections")
-check(selector_calls[0][2].get("key") == "war_room_active_section", "section selector preserves its session key")
+check(len(selector_calls) == 1, "work-area selector renders exactly once per rerun")
+check(selector_calls[0][0] == "Work area", "selector uses a plain-English label")
+check(selector_calls[0][1] == workspace.WORKSPACE_OPTIONS, "selector uses the daily-work-first order")
+check(selector_calls[0][2].get("key") == "war_room_active_section", "selector preserves its session key")
+format_func = selector_calls[0][2].get("format_func")
+check(callable(format_func), "selector formats stable values with friendly labels")
+check(format_func("🏠 One-Load") == "🏠 Analyze Deal", "selector visibly says Analyze Deal")
+check("normal deal work" in fake_st.captions[-1], "default work area explains where normal deal work starts")
 
+routing_st = FakeSt()
 calls: list[str] = []
 workspace._render_decision_center = lambda *args, **kwargs: calls.append("Deal Decision Center")
 namespace = {
@@ -67,30 +90,35 @@ namespace = {
 }
 
 for name in workspace.RENDER_SECTION_MAP:
-    workspace._wrap_renderer(namespace, name, fake_st)
+    workspace._wrap_renderer(namespace, name, routing_st)
 
-namespace["render_one_load_deal_section"](fake_st, SimpleNamespace())
-namespace["render_lead_intake_section"](fake_st, SimpleNamespace())
-namespace["render_repair_section"](fake_st, SimpleNamespace())
-check(calls == ["Deal Decision Center"], "One-Load opens the simplified Deal Decision Center")
+routing_st.session_state["war_room_active_section"] = "🏠 One-Load"
+namespace["render_one_load_deal_section"](routing_st, SimpleNamespace())
+namespace["render_lead_intake_section"](routing_st, SimpleNamespace())
+namespace["render_repair_section"](routing_st, SimpleNamespace())
+check(
+    "Deal Decision Center" in calls and "Legacy One-Load" not in calls,
+    f"Analyze Deal opens the simplified Deal Decision Center; calls={calls!r}",
+)
 
-fake_st.session_state["war_room_active_section"] = "📡 Listing Radar"
-namespace["render_one_load_deal_section"](fake_st, SimpleNamespace())
-namespace["render_lead_intake_section"](fake_st, SimpleNamespace())
-namespace["render_repair_section"](fake_st, SimpleNamespace())
-check(calls == ["Deal Decision Center"], "Listing Radar suppresses all property-analysis renderers")
+before_listing = list(calls)
+routing_st.session_state["war_room_active_section"] = "📡 Listing Radar"
+namespace["render_one_load_deal_section"](routing_st, SimpleNamespace())
+namespace["render_lead_intake_section"](routing_st, SimpleNamespace())
+namespace["render_repair_section"](routing_st, SimpleNamespace())
+check(calls == before_listing, "Listing Radar suppresses property-analysis renderers")
 
-fake_st.session_state["war_room_active_section"] = "🛠️ Repairs"
-repair_result = namespace["render_repair_section"](fake_st, SimpleNamespace())
-namespace["render_one_load_deal_section"](fake_st, SimpleNamespace())
-check(calls[-1] == "Repairs", "selecting Repairs opens the repair workspace")
-check(repair_result == ["upload"], "active Repairs preserves uploaded media return value")
+routing_st.session_state["war_room_active_section"] = "🛠️ Repairs"
+repair_result = namespace["render_repair_section"](routing_st, SimpleNamespace())
+namespace["render_one_load_deal_section"](routing_st, SimpleNamespace())
+check(calls[-1] == "Repairs", "Repair Estimate opens the existing repair workspace")
+check(repair_result == ["upload"], "active Repair Estimate preserves uploaded media return value")
 
-fake_st.session_state["repair_media_files"] = ["saved-file"]
-fake_st.session_state["war_room_active_section"] = "🏠 One-Load"
-hidden_repair_result = namespace["render_repair_section"](fake_st, SimpleNamespace())
-check(hidden_repair_result == ["saved-file"], "closed Repairs preserves saved media for decision math")
-check(workspace.SECTION_NAMES["🏘️ Comps / ARV"] == "Comps / ARV", "Comps and ARV remains separate")
-check(workspace.SECTION_NAMES["✅ QA / Decision"] == "QA / Decision", "QA and Decision remains separate")
+routing_st.session_state["repair_media_files"] = ["saved-file"]
+routing_st.session_state["war_room_active_section"] = "🏠 One-Load"
+hidden_repair_result = namespace["render_repair_section"](routing_st, SimpleNamespace())
+check(hidden_repair_result == ["saved-file"], "closed repair workspace preserves saved media for decision math")
+check(workspace.SECTION_NAMES["🏘️ Comps / ARV"] == "Comps / ARV", "Comps & Value keeps the existing comp engine")
+check(workspace.SECTION_NAMES["✅ QA / Decision"] == "QA / Decision", "Decision & Save keeps the existing decision engine")
 
 print("Single-section workspace smoke test passed.")
