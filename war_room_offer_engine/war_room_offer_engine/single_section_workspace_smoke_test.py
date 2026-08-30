@@ -73,7 +73,7 @@ check(selector_calls[0][2].get("key") == "war_room_active_section", "selector pr
 format_func = selector_calls[0][2].get("format_func")
 check(callable(format_func), "selector formats stable values with friendly labels")
 check(format_func("🏠 One-Load") == "🏠 Analyze Deal", "selector visibly says Analyze Deal")
-check("Analyze Deal" in fake_st.captions[-1], "default work area explains where normal deal work starts")
+check("normal deal work" in fake_st.captions[-1], "default work area explains where normal deal work starts")
 
 routing_st = FakeSt()
 calls: list[str] = []
