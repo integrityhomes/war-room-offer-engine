@@ -5,30 +5,60 @@ import re
 from typing import Any
 
 
+# Daily work comes first. The underlying section names remain unchanged so the
+# stabilized renderers, saved session state, and existing integrations keep the
+# same contracts.
 SECTION_OPTIONS = [
-    "🏠 One-Load",
+    "🏠 Analyze Deal",
     "📡 Listing Radar",
-    "🔎 Pull Data",
-    "🛡️ Protection",
-    "🏷️ Rent",
+    "✅ Decision & Save",
+    "🔎 Property Data",
+    "🏘️ Comps & Value",
+    "🛠️ Repair Estimate",
+    "🏷️ Rent & Rent Comps",
     "📈 Buyer Demand",
-    "📣 Dispo",
-    "🛠️ Repairs",
-    "🏘️ Comps / ARV",
-    "✅ QA / Decision",
+    "📣 Buyer Outreach",
+    "🛡️ Deal Protection",
 ]
 
 SECTION_NAMES = {
-    "🏠 One-Load": "One-Load",
+    "🏠 Analyze Deal": "One-Load",
     "📡 Listing Radar": "Listing Radar",
-    "🔎 Pull Data": "Pull Data",
-    "🛡️ Protection": "Protection",
-    "🏷️ Rent": "Rent",
+    "✅ Decision & Save": "QA / Decision",
+    "🔎 Property Data": "Pull Data",
+    "🏘️ Comps & Value": "Comps / ARV",
+    "🛠️ Repair Estimate": "Repairs",
+    "🏷️ Rent & Rent Comps": "Rent",
     "📈 Buyer Demand": "Buyer Demand",
-    "📣 Dispo": "Dispo",
-    "🛠️ Repairs": "Repairs",
-    "🏘️ Comps / ARV": "Comps / ARV",
-    "✅ QA / Decision": "QA / Decision",
+    "📣 Buyer Outreach": "Dispo",
+    "🛡️ Deal Protection": "Protection",
+}
+
+# Preserve sessions created by the prior developer-facing navigation labels.
+LEGACY_SECTION_ALIASES = {
+    "🏠 One-Load": "🏠 Analyze Deal",
+    "📡 Listing Radar": "📡 Listing Radar",
+    "🔎 Pull Data": "🔎 Property Data",
+    "🛡️ Protection": "🛡️ Deal Protection",
+    "🏷️ Rent": "🏷️ Rent & Rent Comps",
+    "📈 Buyer Demand": "📈 Buyer Demand",
+    "📣 Dispo": "📣 Buyer Outreach",
+    "🛠️ Repairs": "🛠️ Repair Estimate",
+    "🏘️ Comps / ARV": "🏘️ Comps & Value",
+    "✅ QA / Decision": "✅ Decision & Save",
+}
+
+SECTION_DESCRIPTIONS = {
+    "One-Load": "Start here for normal deal work: load one property, verify the evidence, and get the recommended offer path.",
+    "Listing Radar": "Review incoming listings and send the right property into the Deal Analyzer.",
+    "QA / Decision": "Review the final answer, offer range, risks, and saved deal record before taking action.",
+    "Pull Data": "Review or refresh the property facts used by the analysis.",
+    "Comps / ARV": "Review sold comps and the value evidence behind the ARV.",
+    "Repairs": "Review photos, notes, repair scope, and the repair estimate.",
+    "Rent": "Review rent evidence and rent comps, especially when Slow Flip depends on verified rent.",
+    "Buyer Demand": "Review buyer-market strength and exit confidence.",
+    "Dispo": "Review buyer feedback and outreach tools after the deal is protected appropriately.",
+    "Protection": "Review what deal details may be shared before and after the property is under contract.",
 }
 
 RENDER_SECTION_MAP = {
@@ -45,28 +75,43 @@ RENDER_SECTION_MAP = {
 QUICK_LINK_PATTERN = re.compile(r"^\[[^\]]*\*\*(.+?)\*\*\]\(#.+\)$")
 
 
+def _normalize_display_section(value: Any) -> str:
+    selected = str(value or "")
+    if selected in SECTION_OPTIONS:
+        return selected
+    return LEGACY_SECTION_ALIASES.get(selected, SECTION_OPTIONS[0])
+
+
 def active_section(st) -> str:
-    selected = st.session_state.get("war_room_active_section", SECTION_OPTIONS[0])
-    return SECTION_NAMES.get(str(selected), "One-Load")
+    selected = _normalize_display_section(st.session_state.get("war_room_active_section", SECTION_OPTIONS[0]))
+    return SECTION_NAMES.get(selected, "One-Load")
 
 
 def render_workspace_selector(st, original_radio) -> None:
-    """Render the section picker once per Streamlit rerun.
+    """Render the user-facing work-area picker once per Streamlit rerun.
 
-    The picker used to depend on an old quick-link markdown row. Saved deals can
-    bypass that row, which made Rent and Comps / ARV impossible to reopen. The
-    title hook now calls this directly so navigation is always available.
+    The selector keeps every specialist tool available, but puts the three
+    normal operator destinations first: Analyze Deal, Listing Radar, and
+    Decision & Save. Legacy session labels are migrated before the widget is
+    instantiated so existing saved sessions remain usable.
     """
     if getattr(st, "_war_room_workspace_radio_rendered", False):
         return
     st._war_room_workspace_radio_rendered = True
-    st.session_state.setdefault("war_room_active_section", SECTION_OPTIONS[0])
-    original_radio(
-        "Open section",
+
+    current = _normalize_display_section(st.session_state.get("war_room_active_section", SECTION_OPTIONS[0]))
+    st.session_state["war_room_active_section"] = current
+    selected = original_radio(
+        "Work area",
         SECTION_OPTIONS,
         key="war_room_active_section",
-        label_visibility="collapsed",
+        help="Start with Analyze Deal for normal property work. Open the evidence tools only when you need to verify or adjust a specific part of the analysis.",
     )
+    selected_display = _normalize_display_section(selected or st.session_state.get("war_room_active_section"))
+    section_name = SECTION_NAMES.get(selected_display, "One-Load")
+    caption = SECTION_DESCRIPTIONS.get(section_name, "")
+    if caption and hasattr(st, "caption"):
+        st.caption(caption)
 
 
 def _hidden_return(function_name: str, st):
@@ -94,7 +139,7 @@ def _render_comps_only(st, ui):
             from .ui_sections.comps_ui import render_comps_section
         except ImportError:
             from war_room_offer_engine.ui_sections.comps_ui import render_comps_section
-    st.header("🏘️ Comps / ARV")
+    st.header("🏘️ Comps & Value")
     render_comps_section(st, ui)
     return st.session_state.get("repair_media_files", []) or []
 
@@ -194,6 +239,8 @@ def install_workspace() -> bool:
         if match and match.group(1) in {
             "One-Load", "Listing Radar", "Pull Data", "Protection", "Rent",
             "Buyer Demand", "Dispo", "Repairs", "Comps / ARV", "QA / Decision",
+            "Analyze Deal", "Decision & Save", "Property Data", "Comps & Value",
+            "Repair Estimate", "Rent & Rent Comps", "Buyer Outreach", "Deal Protection",
         }:
             render_workspace_selector(st, original_radio)
             return None
