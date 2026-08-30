@@ -274,23 +274,36 @@ def _render_decision(st, decision: dict[str, Any]) -> None:
             st.error(f"# {label}")
         else:
             st.warning(f"# {label}")
-        top = st.columns(5)
-        top[0].metric("Starting Offer", money(decision.get("first_offer")))
-        top[1].metric("Current Deal Price", money(decision.get("price")))
-        top[2].metric("Absolute Maximum", money(decision.get("hard_max")))
-        top[3].metric("Room Left" if number(decision.get("room_left")) >= 0 else "Over Maximum", money(abs(number(decision.get("room_left")))))
-        top[4].metric("Confidence", decision.get("confidence", "Weak"))
-        st.info(decision.get("next_action", ""))
+
+        primary = st.columns(4)
+        primary[0].metric("Starting Offer", money(decision.get("first_offer")))
+        primary[1].metric("Absolute Maximum", money(decision.get("hard_max")))
+        primary[2].metric("Current Deal Price", money(decision.get("price")))
+        primary[3].metric("Confidence", decision.get("confidence", "Weak"))
+
+        next_action = str(decision.get("next_action", "") or "").strip()
+        if next_action:
+            st.info(f"**Next action:** {next_action}")
         st.write("**Why:** " + str(decision.get("reason", "")))
-        st.caption(str(decision.get("formula", "")))
-        second = st.columns(3)
-        second[0].metric(decision.get("margin_label", "Projected Margin"), money(decision.get("projected_margin")))
-        second[1].metric(decision.get("exit_value_label", "Exit Value"), money(decision.get("exit_value")))
-        second[2].metric("Price Source", decision.get("price_source", ""))
+
+        secondary = st.columns(4)
+        secondary[0].metric(
+            "Room Left" if number(decision.get("room_left")) >= 0 else "Over Maximum",
+            money(abs(number(decision.get("room_left")))),
+        )
+        secondary[1].metric(decision.get("margin_label", "Projected Margin"), money(decision.get("projected_margin")))
+        secondary[2].metric(decision.get("exit_value_label", "Exit Value"), money(decision.get("exit_value")))
+        secondary[3].metric("Price Source", decision.get("price_source", ""))
+
         if decision.get("missing"):
             st.warning("Still needed: " + ", ".join(decision["missing"]))
         if decision.get("review_flags"):
             st.warning("Must verify: " + ", ".join(decision["review_flags"]))
+
+        formula = str(decision.get("formula", "") or "").strip()
+        if formula:
+            with st.expander("How this was calculated", expanded=False):
+                st.caption(formula)
 
     with st.expander("Compare all four deal lanes", expanded=False):
         rows = []
@@ -333,7 +346,10 @@ def render(st, ui, original_renderer: Callable, exit_mode_value: str = "Auto") -
     prices[0].number_input("Seller Asking Price", min_value=0, step=1000, key="decision_asking_price")
     prices[1].number_input("Current Negotiated Price", min_value=0, step=500, key="decision_current_negotiated_price", help="The price you currently have the deal negotiated to.")
     prices[2].number_input("Latest Seller Counter", min_value=0, step=500, key="decision_latest_counter")
-    with st.expander("Negotiation Center", expanded=True):
+
+    media = []
+    with st.expander("Optional deal details", expanded=False):
+        st.caption("Add negotiation notes, property media, or intentionally refresh paid data only when you need them.")
         n1, n2, n3 = st.columns(3)
         n1.number_input("Seller Bottom-Line Price", min_value=0, step=500, key="decision_seller_bottom_line")
         n2.selectbox("Negotiation Status", NEGOTIATION_STATUSES, key="decision_negotiation_status")
@@ -344,12 +360,18 @@ def render(st, ui, original_renderer: Callable, exit_mode_value: str = "Auto") -
         t1, t2 = st.columns(2)
         t1.text_area("Negotiation Notes", height=90, key="decision_negotiation_notes")
         t2.text_area("Other Important Terms", height=90, key="decision_other_terms")
-    media = st.file_uploader("Optional property photos or walkthrough video", type=["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v", "avi"], accept_multiple_files=True, key="decision_media")
-    st.checkbox(
-        "Refresh live paid data even if this property is already saved",
-        key="deal_library_force_refresh",
-        help="Leave this off for normal use. Turn it on only when you intentionally want fresh Zillow, RentCast or Apify data.",
-    )
+        media = st.file_uploader(
+            "Optional property photos or walkthrough video",
+            type=["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v", "avi"],
+            accept_multiple_files=True,
+            key="decision_media",
+        )
+        st.checkbox(
+            "Refresh live paid data even if this property is already saved",
+            key="deal_library_force_refresh",
+            help="Leave this off for normal use. Turn it on only when you intentionally want fresh Zillow, RentCast or Apify data.",
+        )
+
     buttons = st.columns([3, 1])
     analyze = buttons[0].button("Pull Everything & Tell Me", type="primary", use_container_width=True)
     reset = buttons[1].button("Start New Property", type="secondary", use_container_width=True)
