@@ -69,6 +69,9 @@ check(selector_calls[0][1] == workspace.SECTION_OPTIONS, "selector exposes all w
 check(selector_calls[0][2].get("key") == "war_room_active_section", "selector preserves its session key")
 check("Analyze Deal" in fake_st.captions[-1], "default work area explains where normal deal work starts")
 
+# Use a clean fake Streamlit instance for renderer routing so the selector's
+# once-per-rerun marker and widget state cannot affect this independent test.
+routing_st = FakeSt()
 calls: list[str] = []
 workspace._render_decision_center = lambda *args, **kwargs: calls.append("Deal Decision Center")
 namespace = {
@@ -83,29 +86,33 @@ namespace = {
 }
 
 for name in workspace.RENDER_SECTION_MAP:
-    workspace._wrap_renderer(namespace, name, fake_st)
+    workspace._wrap_renderer(namespace, name, routing_st)
 
-fake_st.session_state["war_room_active_section"] = "🏠 Analyze Deal"
-namespace["render_one_load_deal_section"](fake_st, SimpleNamespace())
-namespace["render_lead_intake_section"](fake_st, SimpleNamespace())
-namespace["render_repair_section"](fake_st, SimpleNamespace())
-check(calls == ["Deal Decision Center"], "Analyze Deal opens the simplified Deal Decision Center")
+routing_st.session_state["war_room_active_section"] = "🏠 Analyze Deal"
+namespace["render_one_load_deal_section"](routing_st, SimpleNamespace())
+namespace["render_lead_intake_section"](routing_st, SimpleNamespace())
+namespace["render_repair_section"](routing_st, SimpleNamespace())
+check(
+    "Deal Decision Center" in calls and "Legacy One-Load" not in calls,
+    f"Analyze Deal opens the simplified Deal Decision Center; calls={calls!r}",
+)
 
-fake_st.session_state["war_room_active_section"] = "📡 Listing Radar"
-namespace["render_one_load_deal_section"](fake_st, SimpleNamespace())
-namespace["render_lead_intake_section"](fake_st, SimpleNamespace())
-namespace["render_repair_section"](fake_st, SimpleNamespace())
-check(calls == ["Deal Decision Center"], "Listing Radar suppresses property-analysis renderers")
+before_listing = list(calls)
+routing_st.session_state["war_room_active_section"] = "📡 Listing Radar"
+namespace["render_one_load_deal_section"](routing_st, SimpleNamespace())
+namespace["render_lead_intake_section"](routing_st, SimpleNamespace())
+namespace["render_repair_section"](routing_st, SimpleNamespace())
+check(calls == before_listing, "Listing Radar suppresses property-analysis renderers")
 
-fake_st.session_state["war_room_active_section"] = "🛠️ Repair Estimate"
-repair_result = namespace["render_repair_section"](fake_st, SimpleNamespace())
-namespace["render_one_load_deal_section"](fake_st, SimpleNamespace())
+routing_st.session_state["war_room_active_section"] = "🛠️ Repair Estimate"
+repair_result = namespace["render_repair_section"](routing_st, SimpleNamespace())
+namespace["render_one_load_deal_section"](routing_st, SimpleNamespace())
 check(calls[-1] == "Repairs", "Repair Estimate opens the existing repair workspace")
 check(repair_result == ["upload"], "active Repair Estimate preserves uploaded media return value")
 
-fake_st.session_state["repair_media_files"] = ["saved-file"]
-fake_st.session_state["war_room_active_section"] = "🏠 Analyze Deal"
-hidden_repair_result = namespace["render_repair_section"](fake_st, SimpleNamespace())
+routing_st.session_state["repair_media_files"] = ["saved-file"]
+routing_st.session_state["war_room_active_section"] = "🏠 Analyze Deal"
+hidden_repair_result = namespace["render_repair_section"](routing_st, SimpleNamespace())
 check(hidden_repair_result == ["saved-file"], "closed repair workspace preserves saved media for decision math")
 check(workspace.SECTION_NAMES["🏘️ Comps & Value"] == "Comps / ARV", "Comps & Value keeps the existing comp engine")
 check(workspace.SECTION_NAMES["✅ Decision & Save"] == "QA / Decision", "Decision & Save keeps the existing decision engine")
